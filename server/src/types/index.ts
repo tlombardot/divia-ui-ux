@@ -99,6 +99,43 @@ export interface RouteStep {
   intermediateStops?: TransitStop[];
 }
 
+export interface UpcomingStopPrediction {
+  stationId: string;
+  stationName: string;
+  latitude: number;
+  longitude: number;
+  etaMinutes: number;
+}
+
+export interface ControllerProgression {
+  mode: 'STATIONARY' | 'MOVING';
+  directionTerminus: string; // Terminus name or 'STATIONARY'
+  initialStopId: string;
+  initialStopName: string;
+  currentStopId: string;
+  currentStopName: string;
+  currentStopIndex: number;
+  endStopIndex: number;
+  currentLatitude: number;
+  currentLongitude: number;
+  upcomingStops: UpcomingStopPrediction[];
+  alertPolyline: [number, number][];
+  estimatedTerminusAt: number;
+  isExpired: boolean;
+  summaryText: string;
+}
+
+export interface PredictiveAlert {
+  reportId: string;
+  lineId: string;
+  directionTerminus: string;
+  currentStopName: string;
+  targetStopId: string;
+  targetStopName: string;
+  etaMinutes: number;
+  message: string;
+}
+
 export interface RouteOption {
   id: string;
   title: string; // "Recommandé", "Direct sans correspondance", "100% à pied"
@@ -115,6 +152,7 @@ export interface RouteOption {
   nextDepartureMinutes: number;
   hasControllerAlert: boolean;
   alerts: Report[];
+  predictiveAlerts?: PredictiveAlert[];
   crowdStatus?: CrowdStatus;
   crowdSummary?: string;
   fullPolyline: [number, number][];
@@ -132,14 +170,18 @@ export interface Report {
   latitude: number;
   longitude: number;
   direction: string;
+  directionTerminus?: string;
   description?: string;
   crowdLevel?: CrowdLevel;
   reportedAt: number; // Unix timestamp ms
+  lastConfirmedAt?: number;
+  lastConfirmedStopId?: string;
   expiresAt: number; // Unix timestamp ms (40 min CONTROLLER / 25 min CROWD)
   upvotes: number; // "Toujours là"
   downvotes: number; // "Partis"
   reliabilityScore: number; // 0 - 100
   status: ReportStatus;
+  progression?: ControllerProgression;
 }
 
 export interface StationDeparture {
@@ -156,6 +198,7 @@ export interface StationDeparturesResponse {
   crowdStatus: CrowdStatus;
   departures: StationDeparture[];
   controllerAlerts: Report[];
+  predictiveAlerts?: PredictiveAlert[];
   updatedAt: number;
 }
 
@@ -187,6 +230,7 @@ export const createReportSchema = z
     latitude: z.number().min(47.08).max(47.56),
     longitude: z.number().min(4.70).max(5.38),
     direction: z.string().min(1).max(128).trim().default('Station / Quai'),
+    directionTerminus: z.string().min(1).max(128).trim().optional(),
     description: z.string().max(256).trim().optional(),
     crowdLevel: z.enum(['LOW', 'MEDIUM', 'HIGH']).optional(),
   })
@@ -203,6 +247,7 @@ export type CreateReportInput = z.infer<typeof createReportSchema>;
 export const voteReportSchema = z.object({
   reportId: z.string().min(1),
   voteType: z.enum(['up', 'down']), // 'up' = "Toujours là", 'down' = "Partis"
+  recalibrateStopId: z.string().min(1).max(64).optional(),
 });
 
 export type VoteReportInput = z.infer<typeof voteReportSchema>;

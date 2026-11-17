@@ -18,6 +18,7 @@ import {
   LatLng,
   sliceLineGeometry,
 } from '../utils/geometryTopology';
+import { buildRoutePredictiveAlerts } from './controllerTrackerService';
 import { networkGeometryService } from './networkGeometryService';
 import { getPedestrianRoute, PedestrianRoute } from './pedestrianService';
 import { reportService } from './reportService';
@@ -430,9 +431,14 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
           ...walkFromAlighting.polyline,
         ];
 
-        const matchingAlerts = findMatchingReports(
+        const directStopIds = lineSeg.stops.map(s => s.id);
+        const matchingAlerts = findMatchingReports([line.id], directStopIds);
+        const predictiveAlerts = buildRoutePredictiveAlerts(
           [line.id],
-          lineSeg.stops.map(s => s.id)
+          directStopIds,
+          reportService.getActiveControllerReports(now.getTime()),
+          now.getTime(),
+          networkGeometryService.getCachedLinesSync()
         );
         const { crowdStatus, crowdSummary } = summarizeRouteCrowd(segments);
 
@@ -448,8 +454,9 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
           headwayMinutes: headway,
           summary: `${line.id} direct (${transitMinutes} min en transit)`,
           nextDepartureMinutes: nextDepMinutes,
-          hasControllerAlert: matchingAlerts.length > 0,
+          hasControllerAlert: matchingAlerts.length > 0 || predictiveAlerts.length > 0,
           alerts: matchingAlerts,
+          predictiveAlerts,
           crowdStatus,
           crowdSummary,
           fullPolyline,
@@ -632,6 +639,13 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
 
             const allStops = [...legA.stops, ...legB.stops].map(s => s.id);
             const matchingAlerts = findMatchingReports([lineA.id, lineB.id], allStops);
+            const predictiveAlerts = buildRoutePredictiveAlerts(
+              [lineA.id, lineB.id],
+              allStops,
+              reportService.getActiveControllerReports(now.getTime()),
+              now.getTime(),
+              networkGeometryService.getCachedLinesSync()
+            );
             const { crowdStatus, crowdSummary } = summarizeRouteCrowd(segments);
 
             routes.push({
@@ -646,8 +660,9 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
               headwayMinutes: headwayA,
               summary: `${lineA.id} ➜ ${lineB.id} via ${hubStopA.name}`,
               nextDepartureMinutes: nextDepMinA,
-              hasControllerAlert: matchingAlerts.length > 0,
+              hasControllerAlert: matchingAlerts.length > 0 || predictiveAlerts.length > 0,
               alerts: matchingAlerts,
+              predictiveAlerts,
               crowdStatus,
               crowdSummary,
               fullPolyline,

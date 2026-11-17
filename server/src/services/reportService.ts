@@ -1,4 +1,4 @@
-import { ALL_DIJON_STOPS } from '../data/dijonNetwork';
+import { ALL_DIJON_STOPS, getLineById } from '../data/dijonNetwork';
 import {
   CreateReportInput,
   CrowdLevel,
@@ -6,6 +6,11 @@ import {
   Report,
   VoteReportInput,
 } from '../types';
+import {
+  computeControllerProgression,
+  resolveDirectionTerminus,
+  STATIONARY_TTL_MS,
+} from './controllerTrackerService';
 
 export const DEFAULT_REPORT_TTL_MS = 40 * 60 * 1000; // 40 minutes for CONTROLLER per GEMINI.md
 export const CROWD_REPORT_TTL_MS = 25 * 60 * 1000; // 25 minutes for CROWD reports
@@ -87,10 +92,11 @@ export class ReportService {
       lineName: 'T1 · Quetigny Centre',
       latitude: 47.3235,
       longitude: 5.0335,
-      direction: 'Vers Quetigny Centre / Valmy',
-      description: '2 contrôleurs repérés sur le quai tram en direction de République',
-      reportedAt: now - 5 * 60 * 1000,
-      expiresAt: now + (DEFAULT_REPORT_TTL_MS - 5 * 60 * 1000),
+      direction: 'Dir. Quetigny Centre',
+      directionTerminus: 'Quetigny Centre',
+      description: '2 contrôleurs montés à Darcy direction Quetigny Centre',
+      reportedAt: now - 2 * 60 * 1000,
+      expiresAt: now + (DEFAULT_REPORT_TTL_MS - 2 * 60 * 1000),
       upvotes: 4,
       downvotes: 0,
       reliabilityScore: 92,
@@ -106,10 +112,11 @@ export class ReportService {
       lineName: 'T2 · Chenôve Centre',
       latitude: 47.3178,
       longitude: 5.0345,
-      direction: 'Vers Chenôve Centre',
-      description: 'Contrôleurs en civil aperçus à la montée',
-      reportedAt: now - 12 * 60 * 1000,
-      expiresAt: now + (DEFAULT_REPORT_TTL_MS - 12 * 60 * 1000),
+      direction: 'Dir. Chenôve Centre',
+      directionTerminus: 'Chenôve Centre',
+      description: 'Contrôleurs en civil aperçus à la montée vers Chenôve',
+      reportedAt: now - 2 * 60 * 1000,
+      expiresAt: now + (DEFAULT_REPORT_TTL_MS - 2 * 60 * 1000),
       upvotes: 2,
       downvotes: 0,
       reliabilityScore: 85,
@@ -164,13 +171,32 @@ export class ReportService {
 
   /**
    * Create a new report:
-   * - CONTROLLER: strict 40 min TTL
+   * - CONTROLLER: strict 40 min max TTL (35 min if explicitly STATIONARY; moving reports also auto-expire at terminus + 3 min)
    * - CROWD: strict 25 min TTL
    */
   public createReport(input: CreateReportInput): Report {
     const now = Date.now();
     const reportType = input.type || 'CONTROLLER';
-    const ttlMs = reportType === 'CROWD' ? CROWD_REPORT_TTL_MS : DEFAULT_REPORT_TTL_MS;
+    const line = getLineById(input.lineId || '');
+    const resolvedTerminus =
+      reportType === 'CONTROLLER'
+        ? resolveDirectionTerminus(
+            {
+              lineId: input.lineId || 'ALL',
+              direction: input.direction || 'Station / Quai',
+              directionTerminus: input.directionTerminus,
+            },
+            line
+          )
+        : undefined;
+
+    const ttlMs =
+      reportType === 'CROWD'
+        ? CROWD_REPORT_TTL_MS
+        : input.directionTerminus === 'STATIONARY'
+          ? STATIONARY_TTL_MS
+          : DEFAULT_REPORT_TTL_MS;
+
     const prefix = reportType === 'CROWD' ? 'crowd' : 'rep';
     const id = `${prefix}-${now}-${Math.random().toString(36).substring(2, 7)}`;
 
@@ -183,7 +209,12 @@ export class ReportService {
       lineName: input.lineName || 'Toutes lignes',
       latitude: input.latitude,
       longitude: input.longitude,
-      direction: input.direction || 'Station / Quai',
+      direction:
+        input.direction ||
+        (resolvedTerminus && resolvedTerminus !== 'STATIONARY'
+          ? `Dir. ${resolvedTerminus}`
+          : 'À quai (fixe)'),
+      directionTerminus: resolvedTerminus,
       description: input.description,
       crowdLevel: reportType === 'CROWD' ? input.crowdLevel : undefined,
       reportedAt: now,
@@ -194,12 +225,20 @@ export class ReportService {
       status: 'active',
     };
 
+    if (reportType === 'CONTROLLER') {
+      const prog = computeControllerProgression(newReport, now);
+      if (prog) {
+        newReport.progression = prog;
+      }
+    }
+
     this.reports.set(id, newReport);
     return newReport;
   }
 
   /**
    * Vote on an active report ("Toujours là" / "Partis")
+   * "Toujours là" recalibrates the controller position on the current/voted stop.
    */
   public voteReport(input: VoteReportInput): {
     report: Report | null;
@@ -214,10 +253,25 @@ export class ReportService {
     const maxTtl = report.type === 'CROWD' ? CROWD_REPORT_TTL_MS : DEFAULT_REPORT_TTL_MS;
 
     if (input.voteType === 'up') {
+      const prevProg =
+        report.type === 'CONTROLLER' ? computeControllerProgression(report, now) : null;
+
       report.upvotes += 1;
       report.reliabilityScore = Math.min(100, report.reliabilityScore + 5);
       const extendedExpiresAt = report.expiresAt + EXTENSION_TTL_PER_UPVOTE_MS;
       report.expiresAt = Math.min(now + maxTtl, extendedExpiresAt);
+
+      if (report.type === 'CONTROLLER') {
+        report.lastConfirmedAt = now;
+        report.lastConfirmedStopId =
+          input.recalibrateStopId || prevProg?.currentStopId || report.stopId;
+        const nextProg = computeControllerProgression(report, now);
+        if (nextProg) {
+          report.progression = nextProg;
+          report.latitude = nextProg.currentLatitude;
+          report.longitude = nextProg.currentLongitude;
+        }
+      }
 
       this.reports.set(report.id, report);
       return { report, action: 'updated' };
@@ -240,11 +294,32 @@ export class ReportService {
   }
 
   /**
-   * Get all active reports (both CONTROLLER & CROWD)
+   * Get all active reports (both CONTROLLER & CROWD) with live controller progression
    */
   public getActiveReports(currentTime: number = Date.now()): Report[] {
     this.cleanupExpiredReports(currentTime);
-    return Array.from(this.reports.values()).filter(r => r.status === 'active');
+    const active: Report[] = [];
+
+    for (const report of this.reports.values()) {
+      if (report.status !== 'active') continue;
+
+      if (report.type === 'CONTROLLER') {
+        const prog = computeControllerProgression(report, currentTime);
+        if (prog && !prog.isExpired) {
+          active.push({
+            ...report,
+            latitude: prog.currentLatitude,
+            longitude: prog.currentLongitude,
+            progression: prog,
+          });
+          continue;
+        }
+      }
+
+      active.push(report);
+    }
+
+    return active;
   }
 
   public getActiveControllerReports(currentTime: number = Date.now()): Report[] {
@@ -332,13 +407,19 @@ export class ReportService {
   }
 
   /**
-   * Worker method: Purge expired reports (40 min CONTROLLER / 25 min CROWD)
+   * Worker method: Purge expired reports (TTL OR moving controller past terminus + 3 min)
    */
   public cleanupExpiredReports(currentTime: number = Date.now()): Report[] {
     const expiredList: Report[] = [];
 
     for (const [id, report] of this.reports.entries()) {
-      if (currentTime >= report.expiresAt || report.status !== 'active') {
+      const prog =
+        report.type === 'CONTROLLER'
+          ? computeControllerProgression(report, currentTime)
+          : null;
+      const reachedTerminus = Boolean(prog && prog.isExpired);
+
+      if (currentTime >= report.expiresAt || report.status !== 'active' || reachedTerminus) {
         report.status = 'expired';
         expiredList.push(report);
         this.reports.delete(id);

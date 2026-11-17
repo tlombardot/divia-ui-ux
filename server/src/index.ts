@@ -12,6 +12,7 @@ import {
   getLineById,
   getStopById,
 } from './data/dijonNetwork';
+import { buildStationPredictiveAlerts } from './services/controllerTrackerService';
 import { autocompletePlaces, getPlaceDetails } from './services/googlePlacesService';
 import { computeGoogleTransitRoutes } from './services/googleTransitService';
 import { networkGeometryService } from './services/networkGeometryService';
@@ -232,15 +233,26 @@ app.get('/api/stations/:id/departures', (req: Request, res: Response) => {
     station.lines[0],
     now
   );
-  const controllerAlerts = reportService
-    .getActiveControllerReports(now.getTime())
-    .filter(rep => rep.stopId === station.id || station.lines.includes(rep.lineId));
+  const activeControllers = reportService.getActiveControllerReports(now.getTime());
+  const controllerAlerts = activeControllers.filter(
+    rep =>
+      rep.stopId === station.id ||
+      rep.progression?.currentStopId === station.id ||
+      station.lines.includes(rep.lineId)
+  );
+  const predictiveAlerts = buildStationPredictiveAlerts(
+    station.id,
+    activeControllers,
+    now.getTime(),
+    networkGeometryService.getCachedLinesSync()
+  );
 
   res.status(200).json({
     station,
     crowdStatus: stationCrowdStatus,
     departures,
     controllerAlerts,
+    predictiveAlerts,
     updatedAt: now.getTime(),
   });
 });
@@ -484,11 +496,15 @@ reportService.onReportExpired((expiredReport) => {
   io.emit('report:removed', { reportId: expiredReport.id, reason: 'expired_ttl' });
 });
 
-// Start background worker for TTL 40 minutes cleanup
-reportService.startCleanupWorker();
+// Start background worker for TTL & terminus expiry cleanup + 20s Socket.io live controller progression sync
+reportService.startCleanupWorker(20000);
 
-// Start server if executed directly
 if (process.env.NODE_ENV !== 'test') {
+  setInterval(() => {
+    const activeReports = reportService.getActiveReports();
+    io.emit('reports:sync', activeReports);
+  }, 20000);
+
   networkGeometryService.warmupCache();
   server.listen(PORT, () => {
     console.log(`[DiviAkhaaa Server] listening on port ${PORT}`);

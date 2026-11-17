@@ -13,6 +13,7 @@ import {
   RouteStep,
   TransitStop,
 } from '../types';
+import { buildRoutePredictiveAlerts } from './controllerTrackerService';
 import { reportService } from './reportService';
 
 export interface GoogleLatLng {
@@ -566,6 +567,12 @@ export function mapGoogleRouteToRouteOption(
     stopIdsUsed,
     transitAnchorPoints
   );
+  const predictiveAlerts = buildRoutePredictiveAlerts(
+    linesUsed,
+    stopIdsUsed,
+    reportService.getActiveControllerReports(nowDate.getTime()),
+    nowDate.getTime()
+  );
 
   // Summarize worst crowd status across all Google Transit legs
   const transitSegsWithCrowd = segments.filter(s => s.type === 'TRANSIT' && s.crowdStatus);
@@ -628,8 +635,9 @@ export function mapGoogleRouteToRouteOption(
         ? `${summaryLines} (${transitDurationMinutes} min en transit)`
         : `À pied direct · ${googleRoute.distanceMeters ?? 0} m`,
     nextDepartureMinutes,
-    hasControllerAlert: matchingAlerts.length > 0,
+    hasControllerAlert: matchingAlerts.length > 0 || predictiveAlerts.length > 0,
     alerts: matchingAlerts,
+    predictiveAlerts,
     crowdStatus: routeCrowdStatus,
     crowdSummary,
     fullPolyline: resolvedFullPolyline,
