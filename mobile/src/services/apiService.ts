@@ -1,5 +1,5 @@
 import Constants from 'expo-constants';
-import { CrowdLevel, Report, ReportType, RouteOption } from '../types';
+import { CrowdLevel, Report, ReportType, RouteOption, TransitLine } from '../types';
 
 /**
  * Hybrid connection resolver:
@@ -54,6 +54,24 @@ export class ApiService {
       return data.routes || [];
     } catch (error) {
       console.warn('[ApiService] fetchRoutes fallback:', error);
+      return [];
+    }
+  }
+
+  public async fetchNetworkShapes(): Promise<TransitLine[]> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/network/shapes`, {
+        headers: { Accept: 'application/json' },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Erreur réseau (${response.status})`);
+      }
+
+      const data = (await response.json()) as { lines: TransitLine[] };
+      return data.lines || [];
+    } catch (error) {
+      console.warn('[ApiService] fetchNetworkShapes fallback:', error);
       return [];
     }
   }

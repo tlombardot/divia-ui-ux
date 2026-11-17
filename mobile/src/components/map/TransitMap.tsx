@@ -1,14 +1,18 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { ALL_DIJON_STOPS, DIJON_LINES, getLineColor } from '../../data/dijonNetwork';
 import { COLORS } from '../../theme/colors';
-import { Report, RouteOption, TransitStop, UserLocation } from '../../types';
+import { Report, RouteOption, TransitLine, TransitStop, UserLocation } from '../../types';
 import { getCrowdBadgeTheme } from '../../utils/crowdUtils';
+import { computeCorridorOffsets } from '../../utils/polylineOffset';
 
 interface TransitMapProps {
   userLocation: UserLocation;
   reports: Report[];
+  networkLines?: TransitLine[];
+  visibleLineIds?: string[];
+  favoriteStopIds?: string[];
   activeRoute?: RouteOption | null;
   selectedStopId?: string | null;
   showControllersOnly?: boolean;
@@ -23,9 +27,34 @@ interface TransitMapProps {
   mapRef?: React.RefObject<MapView | null>;
 }
 
+function getLineStrokeStyle(line: TransitLine, dimmed: boolean) {
+  if (line.category === 'TRAM') {
+    return {
+      strokeWidth: dimmed ? 3.2 : 5.5,
+      zIndex: 30,
+      lineDashPattern: undefined as number[] | undefined,
+    };
+  }
+  if (line.category === 'LIANE') {
+    return {
+      strokeWidth: dimmed ? 2.4 : 3.8,
+      zIndex: 20,
+      lineDashPattern: undefined as number[] | undefined,
+    };
+  }
+  return {
+    strokeWidth: dimmed ? 1.8 : 2.6,
+    zIndex: 10,
+    lineDashPattern: [8, 5] as number[],
+  };
+}
+
 export const TransitMap: React.FC<TransitMapProps> = ({
   userLocation,
   reports,
+  networkLines = DIJON_LINES,
+  visibleLineIds,
+  favoriteStopIds = [],
   activeRoute,
   selectedStopId,
   showControllersOnly = false,
@@ -39,6 +68,37 @@ export const TransitMap: React.FC<TransitMapProps> = ({
   onMapPanDrag,
   mapRef,
 }) => {
+  // Filter visible lines
+  const filteredLines = useMemo(() => {
+    if (!visibleLineIds) return networkLines;
+    return networkLines.filter(l => visibleLineIds.includes(l.id));
+  }, [networkLines, visibleLineIds]);
+
+  // Compute parallel corridor offsets so overlapping lines sit cleanly side-by-side
+  const offsetLines = useMemo(
+    () => computeCorridorOffsets(filteredLines, 15, 10),
+    [filteredLines]
+  );
+
+  // Filter visible stops (always keep favorite stops & active route stops visible)
+  const visibleStops = useMemo(() => {
+    if (!visibleLineIds) return ALL_DIJON_STOPS;
+    const activeSet = new Set(visibleLineIds);
+    const favSet = new Set(favoriteStopIds);
+
+    return ALL_DIJON_STOPS.filter(stop => {
+      if (favSet.has(stop.id) || stop.id === selectedStopId) return true;
+      return stop.lines.some(lineId => activeSet.has(lineId));
+    });
+  }, [visibleLineIds, favoriteStopIds, selectedStopId]);
+
+  const activeControllerReports = useMemo(
+    () => reports.filter(r => r.status === 'active' && (r.type === 'CONTROLLER' || !r.type)),
+    [reports]
+  );
+
+  const dimmed = Boolean(activeRoute || showControllersOnly);
+
   return (
     <View style={styles.container}>
       <MapView
@@ -55,24 +115,74 @@ export const TransitMap: React.FC<TransitMapProps> = ({
         showsCompass={false}
         onPanDrag={onMapPanDrag}
       >
-        {/* Background Divia Network Lines */}
-        {DIJON_LINES.map(line => (
-          <Polyline
-            key={`network-${line.id}`}
-            coordinates={line.polyline.map(([latitude, longitude]) => ({
-              latitude,
-              longitude,
-            }))}
-            strokeColor={
-              activeRoute || showControllersOnly ? `${line.color}38` : `${line.color}CC`
-            }
-            strokeWidth={activeRoute ? 2.5 : 4}
-            lineCap="round"
-            lineJoin="round"
-          />
-        ))}
+        {/* Divia Network Lines with Parallel Corridor Offsets & Visual Hierarchy */}
+        {offsetLines.map(({ line, coordinates }) => {
+          if (coordinates.length < 2) return null;
+          const styleCfg = getLineStrokeStyle(line, dimmed);
 
-        {/* Active Door-to-Door Route Segments */}
+          return (
+            <Polyline
+              key={`network-${line.id}`}
+              coordinates={coordinates}
+              strokeColor={dimmed ? `${line.color}40` : line.color}
+              strokeWidth={styleCfg.strokeWidth}
+              zIndex={styleCfg.zIndex}
+              lineDashPattern={styleCfg.lineDashPattern}
+              lineCap="round"
+              lineJoin="round"
+            />
+          );
+        })}
+
+        {/* Route Terminus & Key-Point Pill Badges on Map (when not in active navigation/filter clutter) */}
+        {!activeRoute &&
+          !showControllersOnly &&
+          offsetLines.map(({ line, coordinates }) => {
+            if (coordinates.length < 2) return null;
+            const startPt = coordinates[0];
+            const endPt = coordinates[coordinates.length - 1];
+            const isTram = line.category === 'TRAM';
+
+            return (
+              <React.Fragment key={`badges-${line.id}`}>
+                <Marker
+                  coordinate={startPt}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  tracksViewChanges={false}
+                  zIndex={isTram ? 35 : 22}
+                >
+                  <View
+                    style={[
+                      styles.lineRouteBadge,
+                      isTram && styles.lineRouteBadgeTram,
+                      { backgroundColor: line.color },
+                    ]}
+                  >
+                    <Text style={styles.lineRouteBadgeText}>{line.id}</Text>
+                  </View>
+                </Marker>
+
+                <Marker
+                  coordinate={endPt}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  tracksViewChanges={false}
+                  zIndex={isTram ? 35 : 22}
+                >
+                  <View
+                    style={[
+                      styles.lineRouteBadge,
+                      isTram && styles.lineRouteBadgeTram,
+                      { backgroundColor: line.color },
+                    ]}
+                  >
+                    <Text style={styles.lineRouteBadgeText}>{line.id}</Text>
+                  </View>
+                </Marker>
+              </React.Fragment>
+            );
+          })}
+
+        {/* Active Door-to-Door Route Segments (Always highest zIndex) */}
         {activeRoute && activeRoute.segments && (
           <>
             {activeRoute.segments.map((segment, idx) => {
@@ -92,6 +202,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                     strokeWidth={4.5}
                     lineDashPattern={[6, 6]}
                     lineCap="round"
+                    zIndex={50}
                   />
                 );
               }
@@ -103,9 +214,10 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                   key={`seg-${idx}-transit`}
                   coordinates={coords}
                   strokeColor={segColor}
-                  strokeWidth={6}
+                  strokeWidth={6.5}
                   lineCap="round"
                   lineJoin="round"
+                  zIndex={55}
                 />
               );
             })}
@@ -127,6 +239,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                       title={`Monter : ${segment.fromStop.name}`}
                       description={`Ligne ${segment.lineId}`}
                       anchor={{ x: 0.5, y: 0.5 }}
+                      zIndex={60}
                     >
                       <View
                         style={[
@@ -146,6 +259,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                       }}
                       title={`Descendre : ${segment.toStop.name}`}
                       anchor={{ x: 0.5, y: 0.5 }}
+                      zIndex={60}
                     >
                       <View
                         style={[
@@ -169,6 +283,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                     activeRoute.fullPolyline[activeRoute.fullPolyline.length - 1][1],
                 }}
                 title="Destination"
+                zIndex={65}
               >
                 <View style={styles.destPinOuter}>
                   <View style={styles.destPinInner} />
@@ -187,6 +302,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
             }}
             title="Votre position"
             anchor={{ x: 0.5, y: 0.5 }}
+            zIndex={70}
           >
             <View style={styles.userMarkerOuter}>
               <View style={styles.userMarkerInner} />
@@ -194,10 +310,14 @@ export const TransitMap: React.FC<TransitMapProps> = ({
           </Marker>
         )}
 
-        {/* Clickable Major Transit Stops (with live crowd ring indicator) */}
+        {/* Clickable Stations (Tram double ring vs Bus compact dot + Crowd Ring + Favorite Star) */}
         {!showControllersOnly &&
-          ALL_DIJON_STOPS.map(stop => {
+          visibleStops.map(stop => {
             const isSelected = stop.id === selectedStopId;
+            const isTramStop = stop.lines.includes('T1') || stop.lines.includes('T2');
+            const isFav = favoriteStopIds.includes(stop.id);
+            const tramColor = stop.lines.includes('T1') ? '#E11535' : '#4B2982';
+
             const crowdRep = reports.find(
               r => r.type === 'CROWD' && r.status === 'active' && r.stopId === stop.id && r.crowdLevel
             );
@@ -213,52 +333,70 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                   longitude: stop.longitude,
                 }}
                 anchor={{ x: 0.5, y: 0.5 }}
+                zIndex={isSelected ? 50 : isTramStop ? 32 : 18}
                 onPress={() => onSelectStop && onSelectStop(stop)}
               >
-                <View
-                  style={[
-                    styles.stopMarker,
-                    crowdColor ? { borderColor: crowdColor, borderWidth: 3, width: 15, height: 15, borderRadius: 7.5 } : null,
-                    isSelected && styles.stopMarkerSelected,
-                  ]}
-                >
+                {isTramStop ? (
                   <View
                     style={[
-                      styles.stopMarkerCenter,
-                      crowdColor ? { backgroundColor: crowdColor } : null,
-                      isSelected && styles.stopMarkerCenterSelected,
+                      styles.tramStationOuter,
+                      { borderColor: crowdColor || tramColor },
+                      isSelected && styles.stopMarkerSelected,
                     ]}
-                  />
-                </View>
+                  >
+                    <View
+                      style={[
+                        styles.tramStationInner,
+                        { backgroundColor: isFav ? '#D97706' : crowdColor || tramColor },
+                      ]}
+                    />
+                  </View>
+                ) : (
+                  <View
+                    style={[
+                      styles.busStopMarker,
+                      crowdColor ? { borderColor: crowdColor, borderWidth: 2.5 } : null,
+                      isFav ? { borderColor: '#D97706', borderWidth: 2.5 } : null,
+                      isSelected && styles.stopMarkerSelected,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.stopMarkerCenter,
+                        crowdColor ? { backgroundColor: crowdColor } : null,
+                        isSelected && styles.stopMarkerCenterSelected,
+                      ]}
+                    />
+                  </View>
+                )}
               </Marker>
             );
           })}
 
         {/* Active Controller Reports Markers (Waze) */}
-        {reports
-          .filter(r => r.type === 'CONTROLLER' || !r.type)
-          .map(report => (
-            <Marker
-              key={report.id}
-              coordinate={{
-                latitude: report.latitude,
-                longitude: report.longitude,
-              }}
-              onPress={() => onSelectReport(report)}
+        {activeControllerReports.map(report => (
+          <Marker
+            key={report.id}
+            coordinate={{
+              latitude: report.latitude,
+              longitude: report.longitude,
+            }}
+            zIndex={80}
+            onPress={() => onSelectReport(report)}
+          >
+            <View
+              style={[
+                styles.reportMarkerBox,
+                showControllersOnly && styles.reportMarkerEmphasized,
+              ]}
             >
-              <View
-                style={[
-                  styles.reportMarkerBox,
-                  showControllersOnly && styles.reportMarkerEmphasized,
-                ]}
-              >
-                <Text style={styles.reportIcon}>🚨</Text>
-                <View style={styles.reportBadge}>
-                  <Text style={styles.reportBadgeText}>{report.lineId}</Text>
-                </View>
+              <Text style={styles.reportIcon}>🚨</Text>
+              <View style={styles.reportBadge}>
+                <Text style={styles.reportBadgeText}>{report.lineId}</Text>
               </View>
-            </Marker>
-          ))}
+            </View>
+          </Marker>
+        ))}
       </MapView>
 
       {/* Right Floating Controls Stack (above bottom sheet) */}
@@ -295,10 +433,10 @@ export const TransitMap: React.FC<TransitMapProps> = ({
             activeOpacity={0.85}
           >
             <Text style={styles.fabIcon}>🚨</Text>
-            {reports.filter(r => r.type === 'CONTROLLER' || !r.type).length > 0 && (
+            {activeControllerReports.length > 0 && (
               <View style={styles.fabCounter}>
                 <Text style={styles.fabCounterText}>
-                  {reports.filter(r => r.type === 'CONTROLLER' || !r.type).length}
+                  {activeControllerReports.length}
                 </Text>
               </View>
             )}
@@ -316,6 +454,28 @@ const styles = StyleSheet.create({
   map: {
     ...StyleSheet.absoluteFill,
   },
+  lineRouteBadge: {
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.25,
+    shadowRadius: 2,
+    elevation: 3,
+  },
+  lineRouteBadgeTram: {
+    paddingHorizontal: 6,
+    paddingVertical: 2.5,
+    borderRadius: 7,
+  },
+  lineRouteBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '900',
+  },
   userMarkerOuter: {
     width: 28,
     height: 28,
@@ -332,28 +492,47 @@ const styles = StyleSheet.create({
     borderWidth: 2.5,
     borderColor: '#FFFFFF',
   },
-  stopMarker: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+  tramStationOuter: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 3,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.22,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  tramStationInner: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+  },
+  busStopMarker: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     backgroundColor: '#FFFFFF',
     borderWidth: 2,
-    borderColor: '#3C4043',
+    borderColor: '#5F6368',
     justifyContent: 'center',
     alignItems: 'center',
   },
   stopMarkerSelected: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 3,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 3.5,
     borderColor: COLORS.cassis,
   },
   stopMarkerCenter: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#3C4043',
+    width: 3,
+    height: 3,
+    borderRadius: 1.5,
+    backgroundColor: '#5F6368',
   },
   stopMarkerCenterSelected: {
     width: 6,

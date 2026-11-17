@@ -22,6 +22,7 @@ import {
 import { useFavoriteStations } from './src/hooks/useFavoriteStations';
 import { useLiveNavigation } from './src/hooks/useLiveNavigation';
 import { useLocation } from './src/hooks/useLocation';
+import { useNetworkShapes } from './src/hooks/useNetworkShapes';
 import { useReports } from './src/hooks/useReports';
 import { apiService } from './src/services/apiService';
 import { COLORS } from './src/theme/colors';
@@ -40,7 +41,8 @@ export default function App() {
   const mapRef = useRef<MapView | null>(null);
   const { location, isDemoMode, refreshLocation } = useLocation();
   const { reports, controllerReports, createReport, voteReport } = useReports();
-  const { favoriteStops, isFavorite, toggleFavorite } = useFavoriteStations(location);
+  const { favoriteIds, favoriteStops, isFavorite, toggleFavorite } = useFavoriteStations(location);
+  const { lines: networkLines } = useNetworkShapes();
   const {
     activeRoute,
     navState,
@@ -322,6 +324,8 @@ export default function App() {
           mapRef={mapRef}
           userLocation={effectiveUserLocation}
           reports={reports}
+          networkLines={networkLines}
+          favoriteStopIds={favoriteIds}
           activeRoute={isNavigating ? activeRoute : selectedRoute}
           selectedStopId={selectedStop?.id}
           showControllersOnly={showControllersOnly}

@@ -6,14 +6,21 @@ export interface TransitStop {
   lines: string[];
 }
 
+export type LineCategory = 'TRAM' | 'LIANE' | 'BUS';
+export type ShapeSource = 'overpass' | 'osrm' | 'fallback';
+
 export interface TransitLine {
   id: string;
   name: string;
   type: 'tram' | 'bus';
+  category: LineCategory;
+  terminusA: string;
+  terminusB: string;
   color: string;
   textColor: string;
   stops: TransitStop[];
   polyline: [number, number][]; // [lat, lng]
+  shapeSource?: ShapeSource;
 }
 
 export type ReportType = 'CONTROLLER' | 'CROWD';
