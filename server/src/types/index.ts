@@ -34,7 +34,10 @@ export interface RouteSegment {
   toStop?: TransitStop;
   stopsCount?: number;
   passedStops?: TransitStop[];
+  estimatedStopTimes?: string[]; // HH:mm for each stop in passedStops
   turnInstructions?: string[];
+  departureTime?: string;
+  arrivalTime?: string;
 }
 
 // Legacy step interface for backwards compatibility
@@ -54,13 +57,14 @@ export interface RouteStep {
 
 export interface RouteOption {
   id: string;
-  title: string; // "Le plus rapide", "Direct sans correspondance", "100% à pied"
+  title: string; // "Recommandé", "Direct sans correspondance", "100% à pied"
   departureTime: string;
   arrivalTime: string;
   totalDurationMinutes: number;
   walkingDurationMinutes: number;
   transitDurationMinutes: number;
   transfersCount: number;
+  headwayMinutes?: number; // e.g. 5 -> "Toutes les 5 min"
   segments: RouteSegment[];
   steps: RouteStep[]; // backward compat for clients still reading steps
   summary: string;
@@ -90,18 +94,18 @@ export interface Report {
   status: ReportStatus;
 }
 
-// Zod validation schemas (OWASP: Strict Input Validation)
+// Zod validation schemas (OWASP: Strict Input Validation — 25 km Grand Dijon bounds)
 export const coordinateSchema = z.object({
-  latitude: z.number().min(47.20, 'Hors métropole dijonnaise').max(47.45, 'Hors métropole dijonnaise'),
-  longitude: z.number().min(4.90, 'Hors métropole dijonnaise').max(5.20, 'Hors métropole dijonnaise'),
+  latitude: z.number().min(47.08, 'Hors métropole dijonnaise').max(47.56, 'Hors métropole dijonnaise'),
+  longitude: z.number().min(4.70, 'Hors métropole dijonnaise').max(5.38, 'Hors métropole dijonnaise'),
 });
 
 export const routeQuerySchema = z.object({
-  fromLat: z.coerce.number().min(47.20).max(47.45),
-  fromLng: z.coerce.number().min(4.90).max(5.20),
+  fromLat: z.coerce.number().min(47.08).max(47.56),
+  fromLng: z.coerce.number().min(4.70).max(5.38),
   fromLabel: z.string().max(160).optional(),
-  toLat: z.coerce.number().min(47.20).max(47.45),
-  toLng: z.coerce.number().min(4.90).max(5.20),
+  toLat: z.coerce.number().min(47.08).max(47.56),
+  toLng: z.coerce.number().min(4.70).max(5.38),
   toLabel: z.string().max(160).optional(),
   departureTime: z.string().optional(),
 });
@@ -113,8 +117,8 @@ export const createReportSchema = z.object({
   stopName: z.string().min(1).max(128).trim(),
   lineId: z.string().min(1).max(16),
   lineName: z.string().min(1).max(64).trim(),
-  latitude: z.number().min(47.20).max(47.45),
-  longitude: z.number().min(4.90).max(5.20),
+  latitude: z.number().min(47.08).max(47.56),
+  longitude: z.number().min(4.70).max(5.38),
   direction: z.string().min(1).max(128).trim(),
   description: z.string().max(256).trim().optional(),
 });

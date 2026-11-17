@@ -12,21 +12,22 @@ import {
   TransitLine,
   TransitStop,
 } from '../types';
-import { getPedestrianRoute } from './pedestrianService';
+import { getPedestrianRoute, PedestrianRoute } from './pedestrianService';
 import { reportService } from './reportService';
 
-const TRANSIT_MINUTES_PER_STOP = 2; // ~2 minutes par interstation
-const TRANSFER_WAIT_MINUTES = 4; // Temps moyen de battement pour correspondance
+const TRANSIT_MINUTES_PER_STOP = 2; // ~2 min par interstation
+const BOARDING_WAIT_PENALTY_MINUTES = 4; // Temps d'attente moyen première montée
+const TRANSFER_WAIT_PENALTY_MINUTES = 6; // Pénalité de correspondance quai à quai (anti-zigzag)
 
 /**
- * Calcul de la cadence dynamique selon l'heure de la journée (Dijon)
+ * Cadence dynamique de la ligne selon l'heure (Dijon)
  */
 export function getLineHeadwayMinutes(lineId: string, date: Date = new Date()): number {
   const hours = date.getHours();
   const minutes = date.getMinutes();
   const timeInMinutes = hours * 60 + minutes;
 
-  // Heures de pointe dijonnaises : 7h30 - 9h00 (450-540) et 17h00 - 18h30 (1020-1110)
+  // Heures de pointe : 7h30-9h et 17h-18h30
   const isMorningPeak = timeInMinutes >= 450 && timeInMinutes <= 540;
   const isEveningPeak = timeInMinutes >= 1020 && timeInMinutes <= 1110;
   const isPeak = isMorningPeak || isEveningPeak;
@@ -42,7 +43,7 @@ export function getLineHeadwayMinutes(lineId: string, date: Date = new Date()): 
   if (lineId.startsWith('L')) {
     if (isPeak) return 6;
     if (isEvening) return 20;
-    return 11;
+    return 10;
   }
 
   // Lignes de bus B10, B12, B13
@@ -52,7 +53,7 @@ export function getLineHeadwayMinutes(lineId: string, date: Date = new Date()): 
 }
 
 /**
- * Estimation dynamique de l'attente du prochain passage
+ * Estimation de l'attente du prochain départ
  */
 export function getNextDepartureEstimate(lineId: string, date: Date = new Date()): number {
   const headway = getLineHeadwayMinutes(lineId, date);
@@ -69,7 +70,7 @@ function formatTime(date: Date): string {
 }
 
 /**
- * Trouver un trajet direct sur une ligne entre deux arrêts
+ * Trouver un trajet direct entre 2 arrêts sur une ligne
  */
 function findDirectLineSegment(
   line: TransitLine,
@@ -95,7 +96,7 @@ function findDirectLineSegment(
 }
 
 /**
- * Vérifier les signalements contrôleurs Waze actifs sur un ensemble d'arrêts ou de lignes
+ * Trouver les signalements Waze actifs sur un trajet
  */
 function findMatchingReports(linesUsed: string[], stopsUsed: string[]): Report[] {
   const activeReports = reportService.getActiveReports();
@@ -105,7 +106,7 @@ function findMatchingReports(linesUsed: string[], stopsUsed: string[]): Report[]
 }
 
 /**
- * Convertir les segments en steps pour compatibilité arrière
+ * Convertir segments en steps pour compatibilité ascendante
  */
 function mapSegmentsToSteps(segments: RouteSegment[]): RouteStep[] {
   return segments.map(seg => ({
@@ -124,13 +125,25 @@ function mapSegmentsToSteps(segments: RouteSegment[]): RouteStep[] {
 }
 
 /**
- * Calcul multimodal Dijkstra Porte-à-Porte complet
+ * Génère les heures de passage estimées pour chaque arrêt intermédiaire
+ */
+function generateEstimatedStopTimes(startTime: Date, stopCount: number): string[] {
+  const times: string[] = [];
+  for (let i = 0; i <= stopCount; i++) {
+    const stopDate = new Date(startTime.getTime() + i * TRANSIT_MINUTES_PER_STOP * 60 * 1000);
+    times.push(formatTime(stopDate));
+  }
+  return times;
+}
+
+/**
+ * Calcul multimodal Dijkstra Porte-à-Porte avec OSRM et filtres anti-détours stricts
  */
 export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]> {
   const now = query.departureTime ? new Date(query.departureTime) : new Date();
   const routes: RouteOption[] = [];
 
-  const toLabel = query.toLabel || 'Arrivée';
+  const toLabel = query.toLabel || 'Destination';
 
   const directDistance = calculateDistanceMeters(
     query.fromLat,
@@ -140,10 +153,11 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
   );
 
   // ---------------------------------------------------------------------------
-  // Option 1 : Alternative 100 % à pied si distance piétonne < 2.2 km
+  // 1. Alternative 100 % à pied si distance < 2.5 km (2500m)
   // ---------------------------------------------------------------------------
-  if (directDistance <= 2200) {
-    const walkRoute = await getPedestrianRoute(
+  let walkDirectRoute: PedestrianRoute | null = null;
+  if (directDistance <= 2500) {
+    walkDirectRoute = await getPedestrianRoute(
       query.fromLat,
       query.fromLng,
       query.toLat,
@@ -152,15 +166,17 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
     );
 
     const depDate = new Date(now.getTime());
-    const arrDate = new Date(now.getTime() + walkRoute.durationMinutes * 60 * 1000);
+    const arrDate = new Date(now.getTime() + walkDirectRoute.durationMinutes * 60 * 1000);
 
     const walkSegment: RouteSegment = {
       type: 'WALK',
-      instruction: `Marcher jusqu'à ${toLabel} (${walkRoute.distanceMeters} m)`,
-      durationMinutes: walkRoute.durationMinutes,
-      distanceMeters: walkRoute.distanceMeters,
-      polyline: walkRoute.polyline,
-      turnInstructions: walkRoute.turnInstructions,
+      instruction: `Marcher jusqu'à ${toLabel} (${walkDirectRoute.distanceMeters} m)`,
+      durationMinutes: walkDirectRoute.durationMinutes,
+      distanceMeters: walkDirectRoute.distanceMeters,
+      polyline: walkDirectRoute.polyline,
+      turnInstructions: walkDirectRoute.turnInstructions,
+      departureTime: formatTime(depDate),
+      arrivalTime: formatTime(arrDate),
     };
 
     routes.push({
@@ -168,32 +184,64 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
       title: '100% à pied',
       departureTime: formatTime(depDate),
       arrivalTime: formatTime(arrDate),
-      totalDurationMinutes: walkRoute.durationMinutes,
-      walkingDurationMinutes: walkRoute.durationMinutes,
+      totalDurationMinutes: walkDirectRoute.durationMinutes,
+      walkingDurationMinutes: walkDirectRoute.durationMinutes,
       transitDurationMinutes: 0,
       transfersCount: 0,
-      summary: `À pied direct · ${walkRoute.distanceMeters} m`,
+      summary: `À pied direct · ${walkDirectRoute.distanceMeters} m`,
       nextDepartureMinutes: 0,
       hasControllerAlert: false,
       alerts: [],
-      fullPolyline: walkRoute.polyline,
+      fullPolyline: walkDirectRoute.polyline,
       segments: [walkSegment],
       steps: mapSegmentsToSteps([walkSegment]),
     });
   }
 
   // ---------------------------------------------------------------------------
-  // Recherche des arrêts proches du départ et de l'arrivée (Porte-à-Porte)
+  // 2. Recherche des 5 arrêts les plus proches du départ et de l'arrivée
   // ---------------------------------------------------------------------------
-  const departureStops = findNearbyStops(query.fromLat, query.fromLng, 1200, 4);
-  const arrivalStops = findNearbyStops(query.toLat, query.toLng, 1200, 4);
+  const departureStops = findNearbyStops(query.fromLat, query.fromLng, 1400, 5);
+  const arrivalStops = findNearbyStops(query.toLat, query.toLng, 1400, 5);
 
   if (departureStops.length === 0 || arrivalStops.length === 0) {
     return routes;
   }
 
+  // Cache des calculs piétons d'approche pour éviter de répéter OSRM
+  const walkToBoardingCache = new Map<string, PedestrianRoute>();
+  const walkFromAlightingCache = new Map<string, PedestrianRoute>();
+
+  const getWalkToStop = async (stop: TransitStop): Promise<PedestrianRoute> => {
+    if (!walkToBoardingCache.has(stop.id)) {
+      const p = await getPedestrianRoute(
+        query.fromLat,
+        query.fromLng,
+        stop.latitude,
+        stop.longitude,
+        stop.name
+      );
+      walkToBoardingCache.set(stop.id, p);
+    }
+    return walkToBoardingCache.get(stop.id)!;
+  };
+
+  const getWalkFromStop = async (stop: TransitStop): Promise<PedestrianRoute> => {
+    if (!walkFromAlightingCache.has(stop.id)) {
+      const p = await getPedestrianRoute(
+        stop.latitude,
+        stop.longitude,
+        query.toLat,
+        query.toLng,
+        toLabel
+      );
+      walkFromAlightingCache.set(stop.id, p);
+    }
+    return walkFromAlightingCache.get(stop.id)!;
+  };
+
   // ---------------------------------------------------------------------------
-  // Option 2 : Recherche de lignes directes
+  // 3. Calcul des Lignes Directes (Anti-Détours)
   // ---------------------------------------------------------------------------
   for (const dep of departureStops) {
     for (const arr of arrivalStops) {
@@ -204,36 +252,43 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
         if (!lineSeg) continue;
 
         const stopCount = lineSeg.stops.length - 1;
+
+        // RÈGLE ANTI-DÉTOUR 1 : Interdire tout trajet de 1 seul arrêt
+        // si la marche directe entre les deux arrêts est rapide
+        if (stopCount === 1) {
+          const interStopDist = calculateDistanceMeters(
+            dep.stop.latitude,
+            dep.stop.longitude,
+            arr.stop.latitude,
+            arr.stop.longitude
+          );
+          if (interStopDist < 550) continue;
+        }
+
         const transitMinutes = stopCount * TRANSIT_MINUTES_PER_STOP;
         const nextDepMinutes = getNextDepartureEstimate(line.id, now);
+        const headway = getLineHeadwayMinutes(line.id, now);
 
-        // Tracé piéton départ -> arrêt de montée
-        const walkToBoarding = await getPedestrianRoute(
-          query.fromLat,
-          query.fromLng,
-          dep.stop.latitude,
-          dep.stop.longitude,
-          dep.stop.name
-        );
+        const walkToBoarding = await getWalkToStop(dep.stop);
+        const walkFromAlighting = await getWalkFromStop(arr.stop);
 
-        // Tracé piéton arrêt de descente -> destination finale
-        const walkFromAlighting = await getPedestrianRoute(
-          arr.stop.latitude,
-          arr.stop.longitude,
-          query.toLat,
-          query.toLng,
-          toLabel
-        );
-
+        // Durée totale = marche départ + attente montée (+4 min moyenne) + transit + marche arrivée
         const totalMinutes =
           walkToBoarding.durationMinutes +
-          nextDepMinutes +
+          Math.max(nextDepMinutes, BOARDING_WAIT_PENALTY_MINUTES) +
           transitMinutes +
           walkFromAlighting.durationMinutes;
 
-        const depDate = new Date(
+        // RÈGLE ANTI-DÉTOUR 2 : Si la marche 100% à pied existe et est plus rapide ou équivalente,
+        // ne pas proposer un trajet transport inutile
+        if (walkDirectRoute && totalMinutes >= walkDirectRoute.durationMinutes + 3) {
+          continue;
+        }
+
+        const boardingTime = new Date(
           now.getTime() + (walkToBoarding.durationMinutes + nextDepMinutes) * 60 * 1000
         );
+        const alightingTime = new Date(boardingTime.getTime() + transitMinutes * 60 * 1000);
         const arrDate = new Date(now.getTime() + totalMinutes * 60 * 1000);
 
         const transitPolyline: [number, number][] = lineSeg.stops.map(s => [
@@ -241,46 +296,50 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
           s.longitude,
         ]);
 
-        const segments: RouteSegment[] = [];
+        const stopTimes = generateEstimatedStopTimes(boardingTime, stopCount);
 
-        // 1. Marche d'approche
-        segments.push({
-          type: 'WALK',
-          instruction: `Marcher jusqu'à l'arrêt ${dep.stop.name}`,
-          durationMinutes: walkToBoarding.durationMinutes,
-          distanceMeters: walkToBoarding.distanceMeters,
-          polyline: walkToBoarding.polyline,
-          turnInstructions: walkToBoarding.turnInstructions,
-          toStop: dep.stop,
-        });
-
-        // 2. Segment Transit
-        segments.push({
-          type: 'TRANSIT',
-          instruction: `Prendre le ${line.type === 'tram' ? 'Tram' : 'Bus'} ${line.id} (${lineSeg.direction})`,
-          durationMinutes: transitMinutes,
-          distanceMeters: stopCount * 650,
-          polyline: transitPolyline,
-          lineId: line.id,
-          lineName: line.name,
-          lineColor: line.color,
-          direction: lineSeg.direction,
-          fromStop: dep.stop,
-          toStop: arr.stop,
-          stopsCount: stopCount,
-          passedStops: lineSeg.stops,
-        });
-
-        // 3. Marche finale
-        segments.push({
-          type: 'WALK',
-          instruction: `Marcher jusqu'à ${toLabel}`,
-          durationMinutes: walkFromAlighting.durationMinutes,
-          distanceMeters: walkFromAlighting.distanceMeters,
-          polyline: walkFromAlighting.polyline,
-          turnInstructions: walkFromAlighting.turnInstructions,
-          fromStop: arr.stop,
-        });
+        const segments: RouteSegment[] = [
+          {
+            type: 'WALK',
+            instruction: `Marcher jusqu'à l'arrêt ${dep.stop.name}`,
+            durationMinutes: walkToBoarding.durationMinutes,
+            distanceMeters: walkToBoarding.distanceMeters,
+            polyline: walkToBoarding.polyline,
+            turnInstructions: walkToBoarding.turnInstructions,
+            toStop: dep.stop,
+            departureTime: formatTime(now),
+            arrivalTime: formatTime(new Date(now.getTime() + walkToBoarding.durationMinutes * 60 * 1000)),
+          },
+          {
+            type: 'TRANSIT',
+            instruction: `Prendre le ${line.type === 'tram' ? 'Tram' : 'Bus'} ${line.id} (${lineSeg.direction})`,
+            durationMinutes: transitMinutes,
+            distanceMeters: stopCount * 650,
+            polyline: transitPolyline,
+            lineId: line.id,
+            lineName: line.name,
+            lineColor: line.color,
+            direction: lineSeg.direction,
+            fromStop: dep.stop,
+            toStop: arr.stop,
+            stopsCount: stopCount,
+            passedStops: lineSeg.stops,
+            estimatedStopTimes: stopTimes,
+            departureTime: formatTime(boardingTime),
+            arrivalTime: formatTime(alightingTime),
+          },
+          {
+            type: 'WALK',
+            instruction: `Marcher jusqu'à ${toLabel}`,
+            durationMinutes: walkFromAlighting.durationMinutes,
+            distanceMeters: walkFromAlighting.distanceMeters,
+            polyline: walkFromAlighting.polyline,
+            turnInstructions: walkFromAlighting.turnInstructions,
+            fromStop: arr.stop,
+            departureTime: formatTime(alightingTime),
+            arrivalTime: formatTime(arrDate),
+          },
+        ];
 
         const fullPolyline: [number, number][] = [
           ...walkToBoarding.polyline,
@@ -295,14 +354,15 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
 
         routes.push({
           id: `route-direct-${line.id}-${dep.stop.id}-${arr.stop.id}`,
-          title: `Direct sans correspondance (${line.id})`,
-          departureTime: formatTime(depDate),
+          title: `Direct (${line.id})`,
+          departureTime: formatTime(boardingTime),
           arrivalTime: formatTime(arrDate),
           totalDurationMinutes: totalMinutes,
           walkingDurationMinutes:
             walkToBoarding.durationMinutes + walkFromAlighting.durationMinutes,
           transitDurationMinutes: transitMinutes,
           transfersCount: 0,
+          headwayMinutes: headway,
           summary: `${line.id} direct (${transitMinutes} min en transit)`,
           nextDepartureMinutes: nextDepMinutes,
           hasControllerAlert: matchingAlerts.length > 0,
@@ -312,176 +372,220 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
           steps: mapSegmentsToSteps(segments),
         });
 
-        break; // Une seule variante par couple d'arrêts
+        break; // Évite les doublons sur la même ligne pour ce couple
       }
     }
   }
 
   // ---------------------------------------------------------------------------
-  // Option 3 : Correspondance via pôles de correspondance (Darcy, République, etc.)
+  // 4. Calcul des Correspondances via Pôles Majeurs (Max 1 correspondance)
   // ---------------------------------------------------------------------------
-  if (routes.filter(r => r.transfersCount === 0 && r.transitDurationMinutes > 0).length < 2) {
-    const candidateHubs = ['hub-darcy', 'hub-republique', 'hub-monge', 'hub-gare', 'hub-universite'];
+  const candidateHubs = ['hub-darcy', 'hub-republique', 'hub-monge', 'hub-gare', 'hub-universite'];
 
-    for (const dep of departureStops.slice(0, 2)) {
-      for (const arr of arrivalStops.slice(0, 2)) {
-        for (const hubId of candidateHubs) {
-          for (const lineA of DIJON_LINES) {
-            const hubStopA = lineA.stops.find(s => s.id === hubId);
-            if (!hubStopA) continue;
+  for (const dep of departureStops.slice(0, 3)) {
+    for (const arr of arrivalStops.slice(0, 3)) {
+      if (dep.stop.id === arr.stop.id) continue;
 
-            const legA = findDirectLineSegment(lineA, dep.stop, hubStopA);
-            if (!legA) continue;
+      for (const hubId of candidateHubs) {
+        if (dep.stop.id === hubId || arr.stop.id === hubId) continue;
 
-            for (const lineB of DIJON_LINES) {
-              if (lineB.id === lineA.id) continue;
-              const hubStopB = lineB.stops.find(s => s.id === hubId);
-              if (!hubStopB) continue;
+        for (const lineA of DIJON_LINES) {
+          const hubStopA = lineA.stops.find(s => s.id === hubId);
+          if (!hubStopA) continue;
 
-              const legB = findDirectLineSegment(lineB, hubStopB, arr.stop);
-              if (!legB) continue;
+          const legA = findDirectLineSegment(lineA, dep.stop, hubStopA);
+          if (!legA) continue;
+          if (legA.stops.length - 1 < 2) continue; // Pas de leg de 1 seul arrêt
 
-              const stopsCountA = legA.stops.length - 1;
-              const stopsCountB = legB.stops.length - 1;
-              const transitMinA = stopsCountA * TRANSIT_MINUTES_PER_STOP;
-              const transitMinB = stopsCountB * TRANSIT_MINUTES_PER_STOP;
-              const nextDepMinA = getNextDepartureEstimate(lineA.id, now);
+          for (const lineB of DIJON_LINES) {
+            if (lineB.id === lineA.id) continue;
+            const hubStopB = lineB.stops.find(s => s.id === hubId);
+            if (!hubStopB) continue;
 
-              const walkToBoarding = await getPedestrianRoute(
-                query.fromLat,
-                query.fromLng,
-                dep.stop.latitude,
-                dep.stop.longitude,
-                dep.stop.name
-              );
+            const legB = findDirectLineSegment(lineB, hubStopB, arr.stop);
+            if (!legB) continue;
+            if (legB.stops.length - 1 < 2) continue; // Pas de leg de 1 seul arrêt
 
-              const walkFromAlighting = await getPedestrianRoute(
-                arr.stop.latitude,
-                arr.stop.longitude,
-                query.toLat,
-                query.toLng,
-                toLabel
-              );
+            const stopsCountA = legA.stops.length - 1;
+            const stopsCountB = legB.stops.length - 1;
+            const transitMinA = stopsCountA * TRANSIT_MINUTES_PER_STOP;
+            const transitMinB = stopsCountB * TRANSIT_MINUTES_PER_STOP;
+            const nextDepMinA = getNextDepartureEstimate(lineA.id, now);
+            const headwayA = getLineHeadwayMinutes(lineA.id, now);
 
-              const totalMinutes =
-                walkToBoarding.durationMinutes +
-                nextDepMinA +
-                transitMinA +
-                TRANSFER_WAIT_MINUTES +
-                transitMinB +
-                walkFromAlighting.durationMinutes;
+            const walkToBoarding = await getWalkToStop(dep.stop);
+            const walkFromAlighting = await getWalkFromStop(arr.stop);
 
-              const depDate = new Date(
-                now.getTime() + (walkToBoarding.durationMinutes + nextDepMinA) * 60 * 1000
-              );
-              const arrDate = new Date(now.getTime() + totalMinutes * 60 * 1000);
+            // RÈGLE ANTI-DÉTOUR 3 : Pénalité stricte de +6 min à chaque correspondance
+            const totalMinutes =
+              walkToBoarding.durationMinutes +
+              Math.max(nextDepMinA, BOARDING_WAIT_PENALTY_MINUTES) +
+              transitMinA +
+              TRANSFER_WAIT_PENALTY_MINUTES +
+              transitMinB +
+              walkFromAlighting.durationMinutes;
 
-              const polylineA: [number, number][] = legA.stops.map(s => [s.latitude, s.longitude]);
-              const polylineB: [number, number][] = legB.stops.map(s => [s.latitude, s.longitude]);
+            const boardingTimeA = new Date(
+              now.getTime() + (walkToBoarding.durationMinutes + nextDepMinA) * 60 * 1000
+            );
+            const arrivalHubA = new Date(boardingTimeA.getTime() + transitMinA * 60 * 1000);
+            const boardingTimeB = new Date(arrivalHubA.getTime() + TRANSFER_WAIT_PENALTY_MINUTES * 60 * 1000);
+            const alightingTimeB = new Date(boardingTimeB.getTime() + transitMinB * 60 * 1000);
+            const arrDate = new Date(now.getTime() + totalMinutes * 60 * 1000);
 
-              const segments: RouteSegment[] = [
-                {
-                  type: 'WALK',
-                  instruction: `Marcher jusqu'à ${dep.stop.name}`,
-                  durationMinutes: walkToBoarding.durationMinutes,
-                  distanceMeters: walkToBoarding.distanceMeters,
-                  polyline: walkToBoarding.polyline,
-                  turnInstructions: walkToBoarding.turnInstructions,
-                  toStop: dep.stop,
-                },
-                {
-                  type: 'TRANSIT',
-                  instruction: `Prendre le ${lineA.type === 'tram' ? 'Tram' : 'Bus'} ${lineA.id} (${legA.direction})`,
-                  durationMinutes: transitMinA,
-                  distanceMeters: stopsCountA * 650,
-                  polyline: polylineA,
-                  lineId: lineA.id,
-                  lineName: lineA.name,
-                  lineColor: lineA.color,
-                  direction: legA.direction,
-                  fromStop: dep.stop,
-                  toStop: hubStopA,
-                  stopsCount: stopsCountA,
-                  passedStops: legA.stops,
-                },
-                {
-                  type: 'TRANSFER',
-                  instruction: `Correspondance à ${hubStopA.name} : rejoindre le quai ${lineB.id}`,
-                  durationMinutes: TRANSFER_WAIT_MINUTES,
-                  distanceMeters: 60,
-                  polyline: [[hubStopA.latitude, hubStopA.longitude], [hubStopB.latitude, hubStopB.longitude]],
-                  turnInstructions: [`Changer de quai vers ${lineB.id}`],
-                  fromStop: hubStopA,
-                  toStop: hubStopB,
-                },
-                {
-                  type: 'TRANSIT',
-                  instruction: `Prendre le ${lineB.type === 'tram' ? 'Tram' : 'Bus'} ${lineB.id} (${legB.direction})`,
-                  durationMinutes: transitMinB,
-                  distanceMeters: stopsCountB * 650,
-                  polyline: polylineB,
-                  lineId: lineB.id,
-                  lineName: lineB.name,
-                  lineColor: lineB.color,
-                  direction: legB.direction,
-                  fromStop: hubStopB,
-                  toStop: arr.stop,
-                  stopsCount: stopsCountB,
-                  passedStops: legB.stops,
-                },
-                {
-                  type: 'WALK',
-                  instruction: `Marcher jusqu'à ${toLabel}`,
-                  durationMinutes: walkFromAlighting.durationMinutes,
-                  distanceMeters: walkFromAlighting.distanceMeters,
-                  polyline: walkFromAlighting.polyline,
-                  turnInstructions: walkFromAlighting.turnInstructions,
-                  fromStop: arr.stop,
-                },
-              ];
+            const polylineA: [number, number][] = legA.stops.map(s => [s.latitude, s.longitude]);
+            const polylineB: [number, number][] = legB.stops.map(s => [s.latitude, s.longitude]);
 
-              const fullPolyline: [number, number][] = [
-                ...walkToBoarding.polyline,
-                ...polylineA,
-                ...polylineB,
-                ...walkFromAlighting.polyline,
-              ];
+            const stopTimesA = generateEstimatedStopTimes(boardingTimeA, stopsCountA);
+            const stopTimesB = generateEstimatedStopTimes(boardingTimeB, stopsCountB);
 
-              const allStops = [...legA.stops, ...legB.stops].map(s => s.id);
-              const matchingAlerts = findMatchingReports([lineA.id, lineB.id], allStops);
-
-              routes.push({
-                id: `route-transfer-${lineA.id}-${lineB.id}-${hubId}`,
-                title: `${lineA.id} ➜ ${lineB.id} via ${hubStopA.name}`,
-                departureTime: formatTime(depDate),
+            const segments: RouteSegment[] = [
+              {
+                type: 'WALK',
+                instruction: `Marcher jusqu'à ${dep.stop.name}`,
+                durationMinutes: walkToBoarding.durationMinutes,
+                distanceMeters: walkToBoarding.distanceMeters,
+                polyline: walkToBoarding.polyline,
+                turnInstructions: walkToBoarding.turnInstructions,
+                toStop: dep.stop,
+                departureTime: formatTime(now),
+                arrivalTime: formatTime(new Date(now.getTime() + walkToBoarding.durationMinutes * 60 * 1000)),
+              },
+              {
+                type: 'TRANSIT',
+                instruction: `Prendre le ${lineA.type === 'tram' ? 'Tram' : 'Bus'} ${lineA.id} (${legA.direction})`,
+                durationMinutes: transitMinA,
+                distanceMeters: stopsCountA * 650,
+                polyline: polylineA,
+                lineId: lineA.id,
+                lineName: lineA.name,
+                lineColor: lineA.color,
+                direction: legA.direction,
+                fromStop: dep.stop,
+                toStop: hubStopA,
+                stopsCount: stopsCountA,
+                passedStops: legA.stops,
+                estimatedStopTimes: stopTimesA,
+                departureTime: formatTime(boardingTimeA),
+                arrivalTime: formatTime(arrivalHubA),
+              },
+              {
+                type: 'TRANSFER',
+                instruction: `Correspondance à ${hubStopA.name} : rejoindre le quai ${lineB.id}`,
+                durationMinutes: TRANSFER_WAIT_PENALTY_MINUTES,
+                distanceMeters: 60,
+                polyline: [[hubStopA.latitude, hubStopA.longitude], [hubStopB.latitude, hubStopB.longitude]],
+                turnInstructions: [`Changer de quai vers ${lineB.id}`],
+                fromStop: hubStopA,
+                toStop: hubStopB,
+                departureTime: formatTime(arrivalHubA),
+                arrivalTime: formatTime(boardingTimeB),
+              },
+              {
+                type: 'TRANSIT',
+                instruction: `Prendre le ${lineB.type === 'tram' ? 'Tram' : 'Bus'} ${lineB.id} (${legB.direction})`,
+                durationMinutes: transitMinB,
+                distanceMeters: stopsCountB * 650,
+                polyline: polylineB,
+                lineId: lineB.id,
+                lineName: lineB.name,
+                lineColor: lineB.color,
+                direction: legB.direction,
+                fromStop: hubStopB,
+                toStop: arr.stop,
+                stopsCount: stopsCountB,
+                passedStops: legB.stops,
+                estimatedStopTimes: stopTimesB,
+                departureTime: formatTime(boardingTimeB),
+                arrivalTime: formatTime(alightingTimeB),
+              },
+              {
+                type: 'WALK',
+                instruction: `Marcher jusqu'à ${toLabel}`,
+                durationMinutes: walkFromAlighting.durationMinutes,
+                distanceMeters: walkFromAlighting.distanceMeters,
+                polyline: walkFromAlighting.polyline,
+                turnInstructions: walkFromAlighting.turnInstructions,
+                fromStop: arr.stop,
+                departureTime: formatTime(alightingTimeB),
                 arrivalTime: formatTime(arrDate),
-                totalDurationMinutes: totalMinutes,
-                walkingDurationMinutes:
-                  walkToBoarding.durationMinutes + TRANSFER_WAIT_MINUTES + walkFromAlighting.durationMinutes,
-                transitDurationMinutes: transitMinA + transitMinB,
-                transfersCount: 1,
-                summary: `${lineA.id} ➜ ${lineB.id} via ${hubStopA.name}`,
-                nextDepartureMinutes: nextDepMinA,
-                hasControllerAlert: matchingAlerts.length > 0,
-                alerts: matchingAlerts,
-                fullPolyline,
-                segments,
-                steps: mapSegmentsToSteps(segments),
-              });
+              },
+            ];
 
-              break;
-            }
+            const fullPolyline: [number, number][] = [
+              ...walkToBoarding.polyline,
+              ...polylineA,
+              ...polylineB,
+              ...walkFromAlighting.polyline,
+            ];
+
+            const allStops = [...legA.stops, ...legB.stops].map(s => s.id);
+            const matchingAlerts = findMatchingReports([lineA.id, lineB.id], allStops);
+
+            routes.push({
+              id: `route-transfer-${lineA.id}-${lineB.id}-${hubId}`,
+              title: `${lineA.id} ➜ ${lineB.id} via ${hubStopA.name}`,
+              departureTime: formatTime(boardingTimeA),
+              arrivalTime: formatTime(arrDate),
+              totalDurationMinutes: totalMinutes,
+              walkingDurationMinutes:
+                walkToBoarding.durationMinutes + TRANSFER_WAIT_PENALTY_MINUTES + walkFromAlighting.durationMinutes,
+              transitDurationMinutes: transitMinA + transitMinB,
+              transfersCount: 1,
+              headwayMinutes: headwayA,
+              summary: `${lineA.id} ➜ ${lineB.id} via ${hubStopA.name}`,
+              nextDepartureMinutes: nextDepMinA,
+              hasControllerAlert: matchingAlerts.length > 0,
+              alerts: matchingAlerts,
+              fullPolyline,
+              segments,
+              steps: mapSegmentsToSteps(segments),
+            });
+
+            break;
           }
         }
       }
     }
   }
 
-  // Trier par durée totale et assigner le titre "Le plus rapide" au meilleur itinéraire
+  // ---------------------------------------------------------------------------
+  // 5. Filtrage Intelligent des Alternatives (Anti-Détours > +35%)
+  // ---------------------------------------------------------------------------
+  if (routes.length === 0) return [];
+
+  // Tri par durée totale
   const sorted = routes.sort((a, b) => a.totalDurationMinutes - b.totalDurationMinutes);
-  if (sorted.length > 0 && !sorted[0].title.startsWith('100%')) {
-    sorted[0].title = `Le plus rapide · ${sorted[0].summary}`;
+  const bestDuration = sorted[0].totalDurationMinutes;
+
+  // Élimine tout itinéraire faisant un détour > +35 % par rapport au meilleur trajet
+  const maxAllowedDuration = Math.round(bestDuration * 1.35);
+  const filtered = sorted.filter(
+    r => r.totalDurationMinutes <= maxAllowedDuration || r.title.includes('100% à pied')
+  );
+
+  // Dédupliquer les propositions basées sur les mêmes lignes
+  const seenLineCombos = new Set<string>();
+  const distinctRoutes: RouteOption[] = [];
+
+  for (const r of filtered) {
+    const key = r.segments
+      .filter(s => s.type === 'TRANSIT')
+      .map(s => s.lineId)
+      .join('-');
+
+    if (!seenLineCombos.has(key) || key === '') {
+      seenLineCombos.add(key);
+      distinctRoutes.push(r);
+    }
+    if (distinctRoutes.length >= 4) break; // Maximum 3 à 4 alternatives
   }
 
-  return sorted;
+  // Donner le titre "Recommandé" au meilleur itinéraire transport
+  const bestTransit = distinctRoutes.find(r => r.transitDurationMinutes > 0);
+  if (bestTransit) {
+    bestTransit.title = `Recommandé · ${bestTransit.summary}`;
+  }
+
+  return distinctRoutes;
 }

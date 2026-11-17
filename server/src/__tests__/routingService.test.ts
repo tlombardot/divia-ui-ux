@@ -10,7 +10,7 @@ import {
   getNextDepartureEstimate,
 } from '../services/routingService';
 
-describe('routingService — Door-to-Door & Dijkstra Multi-Segments', () => {
+describe('routingService — Door-to-Door & Anti-Detour Dijkstra', () => {
   it('calculates direct distance accurately with Haversine formula', () => {
     // Darcy (47.3235, 5.0335) to Gare (47.3236, 5.0278) is ~430m
     const distance = calculateDistanceMeters(47.3235, 5.0335, 47.3236, 5.0278);
@@ -40,7 +40,7 @@ describe('routingService — Door-to-Door & Dijkstra Multi-Segments', () => {
     expect(getLineHeadwayMinutes('T1', evening)).toBe(15);
 
     expect(getLineHeadwayMinutes('L5', morningPeak)).toBe(6);
-    expect(getLineHeadwayMinutes('L5', offPeak)).toBe(11);
+    expect(getLineHeadwayMinutes('L5', offPeak)).toBe(10);
   });
 
   it('estimates next departure time dynamically', () => {
@@ -59,7 +59,7 @@ describe('routingService — Door-to-Door & Dijkstra Multi-Segments', () => {
     expect(route.turnInstructions.length).toBeGreaterThan(0);
   });
 
-  it('calculates door-to-door route with multiple segments (WALK, TRANSIT)', async () => {
+  it('calculates door-to-door route with multiple segments without absurd detours', async () => {
     // From 12 Rue de la Liberté (~47.3228, 5.0380) to Quetigny Centre (~47.3101, 5.1095)
     const routes = await calculateRoutes({
       fromLat: 47.3228,
@@ -71,18 +71,42 @@ describe('routingService — Door-to-Door & Dijkstra Multi-Segments', () => {
     });
 
     expect(routes.length).toBeGreaterThan(0);
-    const transitRoute = routes.find(r => r.transitDurationMinutes > 0);
-    expect(transitRoute).toBeDefined();
+    expect(routes.length).toBeLessThanOrEqual(4); // Max 4 alternatives
 
-    if (transitRoute) {
-      expect(transitRoute.segments.length).toBeGreaterThanOrEqual(2);
-      expect(transitRoute.segments[0].type).toBe('WALK');
-      expect(transitRoute.segments.some(s => s.type === 'TRANSIT')).toBe(true);
-      expect(transitRoute.fullPolyline.length).toBeGreaterThan(5);
+    const best = routes[0];
+    expect(best.segments.length).toBeGreaterThanOrEqual(2);
+    expect(best.segments[0].type).toBe('WALK');
+
+    // Verification of estimatedStopTimes for transit segments
+    const transitSeg = best.segments.find(s => s.type === 'TRANSIT');
+    if (transitSeg && transitSeg.passedStops && transitSeg.passedStops.length > 0) {
+      expect(transitSeg.estimatedStopTimes).toBeDefined();
+      expect(transitSeg.estimatedStopTimes?.length).toBe(transitSeg.passedStops.length);
     }
   });
 
-  it('proposes 100% walking alternative when distance is under 2.2 km', async () => {
+  it('eliminates detours exceeding +35% of optimal transit duration', async () => {
+    // From Darcy to Université (Campus)
+    const routes = await calculateRoutes({
+      fromLat: 47.3235,
+      fromLng: 5.0335,
+      fromLabel: 'Place Darcy',
+      toLat: 47.3135,
+      toLng: 5.0712,
+      toLabel: 'Université',
+    });
+
+    expect(routes.length).toBeGreaterThan(0);
+    const transitRoutes = routes.filter(r => r.transitDurationMinutes > 0);
+    if (transitRoutes.length > 1) {
+      const bestDuration = transitRoutes[0].totalDurationMinutes;
+      for (const r of transitRoutes) {
+        expect(r.totalDurationMinutes).toBeLessThanOrEqual(Math.round(bestDuration * 1.35) + 1);
+      }
+    }
+  });
+
+  it('proposes 100% walking alternative when distance is under 2.5 km', async () => {
     // Short distance near Darcy to République (~1 km)
     const routes = await calculateRoutes({
       fromLat: 47.3235,

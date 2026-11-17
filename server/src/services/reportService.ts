@@ -21,7 +21,7 @@ export class ReportService {
 
     const darcyReport: Report = {
       id: 'rep-darcy-initial',
-      stopId: 'stop-darcy',
+      stopId: 'hub-darcy',
       stopName: 'Darcy',
       lineId: 'T1',
       lineName: 'T1 · Quetigny Centre',
