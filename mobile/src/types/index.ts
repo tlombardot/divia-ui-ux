@@ -21,6 +21,8 @@ export interface TransitLine {
   category: LineCategory;
   terminusA: string;
   terminusB: string;
+  directionA?: string;
+  directionB?: string;
   color: string;
   textColor: string;
   stops: TransitStop[];
@@ -80,6 +82,43 @@ export interface RouteStep {
   intermediateStops?: TransitStop[];
 }
 
+export interface UpcomingStopPrediction {
+  stationId: string;
+  stationName: string;
+  latitude: number;
+  longitude: number;
+  etaMinutes: number;
+}
+
+export interface ControllerProgression {
+  mode: 'STATIONARY' | 'MOVING';
+  directionTerminus: string;
+  initialStopId: string;
+  initialStopName: string;
+  currentStopId: string;
+  currentStopName: string;
+  currentStopIndex: number;
+  endStopIndex: number;
+  currentLatitude: number;
+  currentLongitude: number;
+  upcomingStops: UpcomingStopPrediction[];
+  alertPolyline: [number, number][];
+  estimatedTerminusAt: number;
+  isExpired: boolean;
+  summaryText: string;
+}
+
+export interface PredictiveAlert {
+  reportId: string;
+  lineId: string;
+  directionTerminus: string;
+  currentStopName: string;
+  targetStopId: string;
+  targetStopName: string;
+  etaMinutes: number;
+  message: string;
+}
+
 export interface RouteOption {
   id: string;
   title: string;
@@ -96,6 +135,7 @@ export interface RouteOption {
   nextDepartureMinutes: number;
   hasControllerAlert: boolean;
   alerts: Report[];
+  predictiveAlerts?: PredictiveAlert[];
   crowdStatus?: CrowdStatus;
   crowdSummary?: string;
   fullPolyline: [number, number][];
@@ -111,14 +151,18 @@ export interface Report {
   latitude: number;
   longitude: number;
   direction: string;
+  directionTerminus?: string;
   description?: string;
   crowdLevel?: CrowdLevel;
   reportedAt: number;
+  lastConfirmedAt?: number;
+  lastConfirmedStopId?: string;
   expiresAt: number;
   upvotes: number;
   downvotes: number;
   reliabilityScore: number;
   status: 'active' | 'expired' | 'dismissed';
+  progression?: ControllerProgression;
 }
 
 export interface UserLocation {

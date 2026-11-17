@@ -12,6 +12,7 @@ export interface CreateReportPayload {
   latitude: number;
   longitude: number;
   direction: string;
+  directionTerminus?: string;
   description?: string;
   crowdLevel?: CrowdLevel;
 }
@@ -85,6 +86,7 @@ export function useReports() {
       latitude: payload.latitude,
       longitude: payload.longitude,
       direction: payload.direction,
+      directionTerminus: payload.directionTerminus,
       description: payload.description,
       crowdLevel: payload.crowdLevel,
       reportedAt: now,
@@ -99,33 +101,39 @@ export function useReports() {
     return optimistic;
   }, []);
 
-  const voteReport = useCallback(async (reportId: string, voteType: 'up' | 'down') => {
-    setReports(prev =>
-      prev
-        .map(r => {
-          if (r.id !== reportId) return r;
-          if (voteType === 'up') {
-            return {
-              ...r,
-              upvotes: r.upvotes + 1,
-              reliabilityScore: Math.min(100, r.reliabilityScore + 5),
-            };
-          } else {
-            return {
-              ...r,
-              downvotes: r.downvotes + 1,
-              reliabilityScore: Math.max(0, r.reliabilityScore - 25),
-            };
-          }
-        })
-        .filter(r => r.reliabilityScore > 20)
-    );
+  const voteReport = useCallback(
+    async (reportId: string, voteType: 'up' | 'down', recalibrateStopId?: string) => {
+      setReports(prev =>
+        prev
+          .map(r => {
+            if (r.id !== reportId) return r;
+            if (voteType === 'up') {
+              return {
+                ...r,
+                upvotes: r.upvotes + 1,
+                reliabilityScore: Math.min(100, r.reliabilityScore + 5),
+                lastConfirmedAt: Date.now(),
+                lastConfirmedStopId:
+                  recalibrateStopId || r.progression?.currentStopId || r.stopId,
+              };
+            } else {
+              return {
+                ...r,
+                downvotes: r.downvotes + 1,
+                reliabilityScore: Math.max(0, r.reliabilityScore - 25),
+              };
+            }
+          })
+          .filter(r => r.reliabilityScore > 20)
+      );
 
-    const success = await apiService.voteReport(reportId, voteType);
-    if (success) {
-      socketService.emitVoteReport({ reportId, voteType });
-    }
-  }, []);
+      const success = await apiService.voteReport(reportId, voteType, recalibrateStopId);
+      if (success) {
+        socketService.emitVoteReport({ reportId, voteType, recalibrateStopId });
+      }
+    },
+    []
+  );
 
   const controllerReports = useMemo(
     () => reports.filter(r => r.status === 'active' && (r.type === 'CONTROLLER' || !r.type)),

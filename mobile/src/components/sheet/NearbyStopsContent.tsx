@@ -9,6 +9,7 @@ import {
 import { SUGGESTED_FAVORITES } from '../../hooks/useFavoriteStations';
 import { COLORS } from '../../theme/colors';
 import { Report, TransitStop, UserLocation } from '../../types';
+import { getApproachingControllerAlertsForStation } from '../../utils/controllerTrackingUtils';
 import {
   computeStationCrowdStatus,
   getCrowdBadgeTheme,
@@ -114,8 +115,15 @@ export const NearbyStopsContent: React.FC<NearbyStopsContentProps> = ({
               const crowd = computeStationCrowdStatus(stop.id, reports, primaryLine);
               const crowdTheme = getCrowdBadgeTheme(crowd.level);
               const alert = controllerReports.find(
-                r => r.stopId === stop.id || r.stopName === stop.name
+                r =>
+                  r.stopId === stop.id ||
+                  r.progression?.currentStopId === stop.id ||
+                  r.stopName === stop.name
               );
+              const approachingAlert = getApproachingControllerAlertsForStation(
+                stop.id,
+                reports
+              ).find(a => a.etaMinutes > 0);
 
               return (
                 <TouchableOpacity
@@ -183,14 +191,20 @@ export const NearbyStopsContent: React.FC<NearbyStopsContentProps> = ({
                     </TouchableOpacity>
                   </View>
 
-                  {/* Immediate Controller Alert Strip if active */}
-                  {alert && (
+                  {/* Immediate OR Predictive Approaching Controller Alert Strip */}
+                  {alert ? (
                     <View style={styles.favAlertStrip}>
                       <Text style={styles.favAlertText}>
                         🚨 Contrôleurs signalés ({alert.lineId}) · {alert.direction}
                       </Text>
                     </View>
-                  )}
+                  ) : approachingAlert ? (
+                    <View style={styles.favPredictiveStrip}>
+                      <Text style={styles.favPredictiveText}>
+                        {approachingAlert.message}
+                      </Text>
+                    </View>
+                  ) : null}
                 </TouchableOpacity>
               );
             })}
@@ -444,6 +458,20 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     color: '#C5221F',
+  },
+  favPredictiveStrip: {
+    marginTop: 8,
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  favPredictiveText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#92400E',
   },
   emptyFavCard: {
     backgroundColor: '#FBF5F8',

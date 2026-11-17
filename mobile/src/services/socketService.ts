@@ -78,7 +78,11 @@ class SocketService {
     }
   }
 
-  public emitVoteReport(payload: { reportId: string; voteType: 'up' | 'down' }): void {
+  public emitVoteReport(payload: {
+    reportId: string;
+    voteType: 'up' | 'down';
+    recalibrateStopId?: string;
+  }): void {
     if (this.socket?.connected) {
       this.socket.emit('report:vote', payload);
     }

@@ -7,6 +7,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -20,6 +21,7 @@ import {
 import { CreateReportPayload } from '../../hooks/useReports';
 import { COLORS } from '../../theme/colors';
 import { CrowdLevel, TransitStop, UserLocation } from '../../types';
+import { filterStationsByQuery } from '../../utils/controllerTrackingUtils';
 import { getCrowdBadgeTheme } from '../../utils/crowdUtils';
 
 interface ReportBottomSheetProps {
@@ -60,19 +62,40 @@ export const ReportBottomSheet: React.FC<ReportBottomSheetProps> = ({
   const [selectedStop, setSelectedStop] = useState<TransitStop>(
     initialStop || nearbyStops[0]?.stop || ALL_DIJON_STOPS[0]
   );
+  const [stationSearchQuery, setStationSearchQuery] = useState<string>('');
   const [selectedLineId, setSelectedLineId] = useState<string>('ALL');
+  const [selectedTerminus, setSelectedTerminus] = useState<string>('STATIONARY');
   const [confirmationMessage, setConfirmationMessage] = useState<string | null>(null);
+
+  const selectedLineObj = useMemo(
+    () => DIJON_LINES.find(l => l.id === selectedLineId) || null,
+    [selectedLineId]
+  );
 
   // Sync pre-selected stop whenever modal opens
   useEffect(() => {
     if (visible) {
       translateY.setValue(0);
       setConfirmationMessage(null);
+      setStationSearchQuery('');
       const targetStop = initialStop || nearbyStops[0]?.stop || ALL_DIJON_STOPS[0];
       setSelectedStop(targetStop);
-      setSelectedLineId(targetStop.lines.length === 1 ? targetStop.lines[0] : 'ALL');
+      const defaultLine = targetStop.lines[0] || 'ALL';
+      setSelectedLineId(defaultLine);
+      const lineObj = DIJON_LINES.find(l => l.id === defaultLine);
+      setSelectedTerminus(lineObj ? lineObj.terminusB : 'STATIONARY');
     }
   }, [visible, initialStop, nearbyStops, translateY]);
+
+  const handleSelectLine = (lineId: string) => {
+    setSelectedLineId(lineId);
+    if (lineId === 'ALL') {
+      setSelectedTerminus('STATIONARY');
+    } else {
+      const lineObj = DIJON_LINES.find(l => l.id === lineId);
+      setSelectedTerminus(lineObj ? lineObj.terminusB : 'STATIONARY');
+    }
+  };
 
   // Swipe down to dismiss gesture
   const panResponder = useRef(
@@ -120,6 +143,12 @@ export const ReportBottomSheet: React.FC<ReportBottomSheetProps> = ({
         ? 'Toutes lignes'
         : lineObj?.name || selectedLineId;
 
+    const isFixed = selectedLineId === 'ALL' || selectedTerminus === 'STATIONARY';
+    const resolvedTerminus = isFixed ? 'STATIONARY' : selectedTerminus;
+    const directionLabel = isFixed
+      ? `À quai (fixe) · ${selectedStop.name}`
+      : `Dir. ${selectedTerminus}`;
+
     onSubmitReport({
       type,
       stopId: selectedStop.id,
@@ -128,16 +157,16 @@ export const ReportBottomSheet: React.FC<ReportBottomSheetProps> = ({
       lineName,
       latitude: selectedStop.latitude,
       longitude: selectedStop.longitude,
-      direction:
-        selectedLineId === 'ALL'
-          ? `Station ${selectedStop.name}`
-          : `Ligne ${selectedLineId} · ${selectedStop.name}`,
+      direction: directionLabel,
+      directionTerminus: type === 'CONTROLLER' ? resolvedTerminus : undefined,
       crowdLevel,
     });
 
     const msg =
       type === 'CONTROLLER'
-        ? `Merci ! Contrôleurs signalés à ${selectedStop.name}`
+        ? isFixed
+          ? `Contrôleurs à quai signalés à ${selectedStop.name}`
+          : `Suivi en direct lancé : ${selectedLineId} dir. ${selectedTerminus}`
         : `Merci ! Affluence "${getCrowdBadgeTheme(crowdLevel!).label}" partagée`;
 
     setConfirmationMessage(msg);
@@ -148,9 +177,26 @@ export const ReportBottomSheet: React.FC<ReportBottomSheetProps> = ({
     }, 1150);
   };
 
-  // Ensure selected stop is always first in the carousel
+  // Searchable station list across ALL network stations (T1..B13)
   const carouselStops = useMemo(() => {
-    const topNearby = nearbyStops.slice(0, 7);
+    const trimmed = stationSearchQuery.trim();
+    if (trimmed.length > 0) {
+      const matched = filterStationsByQuery(ALL_DIJON_STOPS, trimmed);
+      return matched
+        .map(stop => ({
+          stop,
+          dist: calculateDistanceMeters(
+            userLocation.latitude,
+            userLocation.longitude,
+            stop.latitude,
+            stop.longitude
+          ),
+        }))
+        .sort((a, b) => a.dist - b.dist)
+        .slice(0, 12);
+    }
+
+    const topNearby = nearbyStops.slice(0, 8);
     if (topNearby.some(item => item.stop.id === selectedStop.id)) {
       return topNearby;
     }
@@ -160,8 +206,8 @@ export const ReportBottomSheet: React.FC<ReportBottomSheetProps> = ({
       selectedStop.latitude,
       selectedStop.longitude
     );
-    return [{ stop: selectedStop, dist }, ...topNearby.slice(0, 6)];
-  }, [nearbyStops, selectedStop, userLocation.latitude, userLocation.longitude]);
+    return [{ stop: selectedStop, dist }, ...topNearby.slice(0, 7)];
+  }, [nearbyStops, selectedStop, stationSearchQuery, userLocation.latitude, userLocation.longitude]);
 
   return (
     <Modal
@@ -216,12 +262,34 @@ export const ReportBottomSheet: React.FC<ReportBottomSheetProps> = ({
                 </TouchableOpacity>
               </View>
 
-              {/* Nearby Stops Quick Switcher Carousel */}
+              {/* All-Network Station Search Input (Tram, Liane, Bus B10/B12/B13) */}
+              <View style={styles.stationSearchBox}>
+                <Text style={styles.searchIcon}>🔍</Text>
+                <TextInput
+                  style={styles.stationSearchInput}
+                  placeholder="Rechercher n'importe quelle station (Darcy, Ahuy, Chicago...)"
+                  placeholderTextColor="#70757A"
+                  value={stationSearchQuery}
+                  onChangeText={setStationSearchQuery}
+                  autoCorrect={false}
+                />
+                {stationSearchQuery.length > 0 && (
+                  <TouchableOpacity
+                    onPress={() => setStationSearchQuery('')}
+                    style={styles.searchClearBtn}
+                  >
+                    <Text style={styles.searchClearText}>✕</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* Nearby / Search Results Stops Quick Switcher Carousel */}
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.stopsCarousel}
                 style={styles.carouselWrapper}
+                keyboardShouldPersistTaps="handled"
               >
                 {carouselStops.map(({ stop, dist }) => {
                   const active = stop.id === selectedStop.id;
@@ -232,7 +300,7 @@ export const ReportBottomSheet: React.FC<ReportBottomSheetProps> = ({
                       onPress={() => {
                         setSelectedStop(stop);
                         if (selectedLineId !== 'ALL' && !stop.lines.includes(selectedLineId)) {
-                          setSelectedLineId('ALL');
+                          handleSelectLine(stop.lines[0] || 'ALL');
                         }
                       }}
                       activeOpacity={0.75}
@@ -251,6 +319,7 @@ export const ReportBottomSheet: React.FC<ReportBottomSheetProps> = ({
                           active && styles.stopChipDistActive,
                         ]}
                       >
+                        {stop.lines.slice(0, 3).join('·')} ·{' '}
                         {dist < 1000 ? `${dist} m` : `${(dist / 1000).toFixed(1)} km`}
                       </Text>
                     </TouchableOpacity>
@@ -258,7 +327,7 @@ export const ReportBottomSheet: React.FC<ReportBottomSheetProps> = ({
                 })}
               </ScrollView>
 
-              {/* Optional Colored Line Selector Pills */}
+              {/* Colored Line Selector Pills */}
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -270,7 +339,7 @@ export const ReportBottomSheet: React.FC<ReportBottomSheetProps> = ({
                     styles.allLinesPill,
                     selectedLineId === 'ALL' && styles.allLinesPillActive,
                   ]}
-                  onPress={() => setSelectedLineId('ALL')}
+                  onPress={() => handleSelectLine('ALL')}
                   activeOpacity={0.75}
                 >
                   <Text
@@ -294,7 +363,7 @@ export const ReportBottomSheet: React.FC<ReportBottomSheetProps> = ({
                         { backgroundColor: bg },
                         active && styles.linePillActive,
                       ]}
-                      onPress={() => setSelectedLineId(lineId)}
+                      onPress={() => handleSelectLine(lineId)}
                       activeOpacity={0.8}
                     >
                       <Text style={styles.linePillText}>{lineId}</Text>
@@ -302,6 +371,76 @@ export const ReportBottomSheet: React.FC<ReportBottomSheetProps> = ({
                   );
                 })}
               </ScrollView>
+
+              {/* 1-Tap Direction (Terminus) Selector for Predictive Stop-by-Stop Tracking */}
+              {selectedLineObj && (
+                <View style={styles.directionSection}>
+                  <Text style={styles.directionSectionLabel}>
+                    Direction (suivi en direct arrêt par arrêt)
+                  </Text>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.directionRow}
+                  >
+                    <TouchableOpacity
+                      style={[
+                        styles.dirChip,
+                        selectedTerminus === selectedLineObj.terminusB && styles.dirChipActive,
+                      ]}
+                      onPress={() => setSelectedTerminus(selectedLineObj.terminusB)}
+                      activeOpacity={0.8}
+                    >
+                      <Text
+                        style={[
+                          styles.dirChipText,
+                          selectedTerminus === selectedLineObj.terminusB &&
+                            styles.dirChipTextActive,
+                        ]}
+                      >
+                        → Dir. {selectedLineObj.terminusB}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.dirChip,
+                        selectedTerminus === selectedLineObj.terminusA && styles.dirChipActive,
+                      ]}
+                      onPress={() => setSelectedTerminus(selectedLineObj.terminusA)}
+                      activeOpacity={0.8}
+                    >
+                      <Text
+                        style={[
+                          styles.dirChipText,
+                          selectedTerminus === selectedLineObj.terminusA &&
+                            styles.dirChipTextActive,
+                        ]}
+                      >
+                        → Dir. {selectedLineObj.terminusA}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.dirChip,
+                        selectedTerminus === 'STATIONARY' && styles.dirChipActive,
+                      ]}
+                      onPress={() => setSelectedTerminus('STATIONARY')}
+                      activeOpacity={0.8}
+                    >
+                      <Text
+                        style={[
+                          styles.dirChipText,
+                          selectedTerminus === 'STATIONARY' && styles.dirChipTextActive,
+                        ]}
+                      >
+                        📍 À quai (fixe)
+                      </Text>
+                    </TouchableOpacity>
+                  </ScrollView>
+                </View>
+              )}
 
               {/* =========================================================== */}
               {/* BLOC 1 — CONTRÔLEURS (1-Tap Divia Cassis Action Card)       */}
@@ -317,10 +456,14 @@ export const ReportBottomSheet: React.FC<ReportBottomSheetProps> = ({
                 </View>
                 <View style={styles.controllerTexts}>
                   <Text style={styles.controllerTitle}>
-                    Contrôleurs présents à cet arrêt
+                    {selectedLineId !== 'ALL' && selectedTerminus !== 'STATIONARY'
+                      ? `Contrôleurs à bord (${selectedLineId} → ${selectedTerminus})`
+                      : `Contrôleurs présents à ${selectedStop.name}`}
                   </Text>
                   <Text style={styles.controllerSub}>
-                    Diffusion instantanée · Expire automatiquement (40 min)
+                    {selectedLineId !== 'ALL' && selectedTerminus !== 'STATIONARY'
+                      ? 'Suivi prédictif arrêt par arrêt · Suppression auto au terminus'
+                      : 'Contrôle fixe à quai · Diffusion instantanée (35 min)'}
                   </Text>
                 </View>
                 <Text style={styles.controllerArrow}>›</Text>
@@ -460,6 +603,67 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: '#5F6368',
+  },
+  stationSearchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F1F3F4',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    height: 38,
+    marginBottom: 10,
+  },
+  searchIcon: {
+    fontSize: 14,
+    marginRight: 6,
+  },
+  stationSearchInput: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#202124',
+    padding: 0,
+  },
+  searchClearBtn: {
+    padding: 4,
+  },
+  searchClearText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#70757A',
+  },
+  directionSection: {
+    marginBottom: 12,
+  },
+  directionSectionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#5F6368',
+    marginBottom: 6,
+  },
+  directionRow: {
+    gap: 8,
+  },
+  dirChip: {
+    backgroundColor: '#F8F9FA',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#E8EAED',
+  },
+  dirChipActive: {
+    backgroundColor: '#FFF0F6',
+    borderColor: COLORS.cassis,
+  },
+  dirChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#3C4043',
+  },
+  dirChipTextActive: {
+    color: COLORS.cassis,
+    fontWeight: '800',
   },
   carouselWrapper: {
     marginBottom: 10,

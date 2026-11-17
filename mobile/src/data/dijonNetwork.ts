@@ -182,8 +182,11 @@ export const STOPS_L6: TransitStop[] = [
 export const STOPS_B10: TransitStop[] = [
   { id: 'b10-ahuy', name: 'Ahuy', latitude: 47.3680, longitude: 5.0280, lines: ['B10'] },
   { id: 'b10-hauteville', name: 'Hauteville', latitude: 47.3550, longitude: 5.0180, lines: ['B10'] },
+  { id: 'b10-daix', name: 'Daix Mairie', latitude: 47.3492, longitude: 5.0045, lines: ['B10'] },
+  { id: 'b10-sainte-anne', name: 'Sainte-Anne', latitude: 47.3358, longitude: 5.0235, lines: ['B10'] },
   { id: 'b10-victorhugo', name: 'Victor Hugo', latitude: 47.3270, longitude: 5.0290, lines: ['B10'] },
   HUB_DARCY,
+  { id: 'l5-spuller', name: 'Spuller', latitude: 47.3282, longitude: 5.0242, lines: ['L5', 'B10'] },
   { id: 'l5-talant', name: 'Talant Dullin', latitude: 47.3371, longitude: 5.0028, lines: ['L5', 'B10'] },
   { id: 'b10-talant-citadelle', name: 'Talant Citadelle', latitude: 47.3385, longitude: 4.9965, lines: ['B10'] },
 ];
@@ -192,19 +195,24 @@ export const STOPS_B10: TransitStop[] = [
 export const STOPS_B12: TransitStop[] = [
   { id: 'b12-plombieres', name: 'Plombières', latitude: 47.3350, longitude: 4.9720, lines: ['B12'] },
   { id: 'b12-velars', name: 'Canal de Bourgogne', latitude: 47.3290, longitude: 4.9980, lines: ['B12'] },
+  { id: 'b12-kir', name: 'Lac Kir', latitude: 47.3264, longitude: 5.0112, lines: ['B12'] },
   HUB_GARE,
   HUB_DARCY,
   HUB_MONGE,
+  { id: 'b12-premier-mai', name: '1er Mai', latitude: 47.3145, longitude: 5.0320, lines: ['B12'] },
+  { id: 'b12-port-canal', name: 'Port du Canal', latitude: 47.3126, longitude: 5.0398, lines: ['B12'] },
   { id: 'b12-chicago', name: 'Chicago', latitude: 47.3120, longitude: 5.0540, lines: ['B12'] },
 ];
 
 // Arrêts Ligne B13
 export const STOPS_B13: TransitStop[] = [
   { id: 'b13-fontaine', name: 'Fontaine Village', latitude: 47.3440, longitude: 5.0190, lines: ['B13'] },
+  { id: 'b13-saint-martin', name: 'Saint-Martin', latitude: 47.3375, longitude: 5.0228, lines: ['B13'] },
   { id: 'b13-montchapet', name: 'Montchapet', latitude: 47.3310, longitude: 5.0260, lines: ['B13'] },
   HUB_GARE,
   HUB_DARCY,
   HUB_MONGE,
+  { id: 'b13-larrey', name: 'Larrey', latitude: 47.3118, longitude: 5.0235, lines: ['B13'] },
   { id: 'b13-mottegiron', name: 'Motte Giron', latitude: 47.3060, longitude: 5.0150, lines: ['B13'] },
 ];
 

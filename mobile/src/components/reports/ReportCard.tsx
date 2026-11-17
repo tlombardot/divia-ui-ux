@@ -1,10 +1,12 @@
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { getLineColor } from '../../data/dijonNetwork';
 import { COLORS } from '../../theme/colors';
 import { Report } from '../../types';
+import { resolveControllerProgression } from '../../utils/controllerTrackingUtils';
 
 interface ReportCardProps {
   report: Report;
-  onVoteUp: (reportId: string) => void;
+  onVoteUp: (reportId: string, recalibrateStopId?: string) => void;
   onVoteDown: (reportId: string) => void;
   onClose: () => void;
 }
@@ -16,17 +18,25 @@ export const ReportCard: React.FC<ReportCardProps> = ({
   onClose,
 }) => {
   const minutesAgo = Math.max(1, Math.round((Date.now() - report.reportedAt) / 60000));
+  const prog = resolveControllerProgression(report);
+  const lineBg = getLineColor(report.lineId);
 
   return (
     <View style={styles.card}>
       <View style={styles.topRow}>
         <View style={styles.titleGroup}>
-          <View style={styles.badgeLine}>
+          <View style={[styles.badgeLine, { backgroundColor: lineBg }]}>
             <Text style={styles.badgeLineText}>{report.lineId}</Text>
           </View>
           <View style={styles.titleTexts}>
-            <Text style={styles.stopName}>{report.stopName}</Text>
-            <Text style={styles.directionText}>{report.direction}</Text>
+            <Text style={styles.stopName}>
+              {prog?.mode === 'MOVING'
+                ? `Vers ${prog.currentStopName}`
+                : report.stopName}
+            </Text>
+            <Text style={styles.directionText}>
+              {prog?.summaryText || report.direction}
+            </Text>
           </View>
         </View>
 
@@ -34,6 +44,22 @@ export const ReportCard: React.FC<ReportCardProps> = ({
           <Text style={styles.closeText}>✕</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Upcoming threatened stops with ETA */}
+      {prog?.mode === 'MOVING' && prog.upcomingStops.length > 0 && (
+        <View style={styles.upcomingBox}>
+          <Text style={styles.upcomingTitle}>Prochains arrêts menacés :</Text>
+          <View style={styles.upcomingChips}>
+            {prog.upcomingStops.map(up => (
+              <View key={up.stationId} style={styles.upcomingChip}>
+                <Text style={styles.upcomingChipText}>
+                  {up.stationName} · ~{up.etaMinutes} min
+                </Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      )}
 
       {report.description ? (
         <Text style={styles.description}>« {report.description} »</Text>
@@ -52,7 +78,7 @@ export const ReportCard: React.FC<ReportCardProps> = ({
       <View style={styles.voteRow}>
         <TouchableOpacity
           style={[styles.voteButton, styles.voteUpButton]}
-          onPress={() => onVoteUp(report.id)}
+          onPress={() => onVoteUp(report.id, prog?.currentStopId)}
           activeOpacity={0.8}
         >
           <Text style={styles.voteUpText}>👍 Toujours là</Text>
@@ -138,6 +164,38 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.surface,
     padding: 8,
     borderRadius: 8,
+  },
+  upcomingBox: {
+    marginTop: 10,
+    backgroundColor: '#FEF3F2',
+    borderWidth: 1,
+    borderColor: '#FECDCA',
+    borderRadius: 10,
+    padding: 9,
+  },
+  upcomingTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#B42318',
+    marginBottom: 5,
+  },
+  upcomingChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  upcomingChip: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#FDA29B',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  upcomingChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#912018',
   },
   metaRow: {
     flexDirection: 'row',

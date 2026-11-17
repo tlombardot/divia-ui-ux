@@ -4,6 +4,10 @@ import MapView, { Marker, Polyline } from 'react-native-maps';
 import { ALL_DIJON_STOPS, DIJON_LINES, getLineColor } from '../../data/dijonNetwork';
 import { COLORS } from '../../theme/colors';
 import { Report, RouteOption, TransitLine, TransitStop, UserLocation } from '../../types';
+import {
+  computeEffectiveVisibleLineIds,
+  resolveControllerProgression,
+} from '../../utils/controllerTrackingUtils';
 import { getCrowdBadgeTheme } from '../../utils/crowdUtils';
 import { computeCorridorOffsets } from '../../utils/polylineOffset';
 
@@ -80,11 +84,17 @@ export const TransitMap: React.FC<TransitMapProps> = ({
   onMapPanDrag,
   mapRef,
 }) => {
+  // Auto-include any bus/tram line used in activeRoute even if unchecked in global filter
+  const effectiveVisibleLineIds = useMemo(() => {
+    if (!visibleLineIds) return undefined;
+    return computeEffectiveVisibleLineIds(visibleLineIds, activeRoute);
+  }, [visibleLineIds, activeRoute]);
+
   // Filter visible permanent Divia lines
   const filteredLines = useMemo(() => {
-    if (!visibleLineIds) return networkLines;
-    return networkLines.filter(l => visibleLineIds.includes(l.id));
-  }, [networkLines, visibleLineIds]);
+    if (!effectiveVisibleLineIds) return networkLines;
+    return networkLines.filter(l => effectiveVisibleLineIds.includes(l.id));
+  }, [networkLines, effectiveVisibleLineIds]);
 
   // Subtle parallel corridor offsets (±2.5m max) so shared T1/T2 corridors stay crisp
   const offsetLines = useMemo(
@@ -97,6 +107,16 @@ export const TransitMap: React.FC<TransitMapProps> = ({
   const activeControllerReports = useMemo(
     () => reports.filter(r => r.status === 'active' && (r.type === 'CONTROLLER' || !r.type)),
     [reports]
+  );
+
+  // Resolve live stop-by-stop progressions for each active controller
+  const trackedControllers = useMemo(
+    () =>
+      activeControllerReports.map(report => ({
+        report,
+        progression: resolveControllerProgression(report, Date.now(), networkLines),
+      })),
+    [activeControllerReports, networkLines]
   );
 
   // Active community crowd reports indexed by stopId
@@ -113,17 +133,32 @@ export const TransitMap: React.FC<TransitMapProps> = ({
     return map;
   }, [reports]);
 
-  // Keep native map clean: display ONLY interactive DiviAkhaaa stops
-  // (Favorite stations ★, stations with live community crowd reports, or currently selected stop)
-  const highlightedStops = useMemo(() => {
+  // All clickable stations on visible/active lines + Favorites (★) + Crowd + Selected
+  const visibleStops = useMemo(() => {
     const favSet = new Set(favoriteStopIds);
-    return ALL_DIJON_STOPS.filter(
+    const allStopsMap = new Map<string, TransitStop>();
+    for (const stop of ALL_DIJON_STOPS) {
+      allStopsMap.set(stop.id, stop);
+    }
+    for (const line of networkLines) {
+      for (const stop of line.stops) {
+        if (!allStopsMap.has(stop.id)) {
+          allStopsMap.set(stop.id, stop);
+        }
+      }
+    }
+    const allStops = Array.from(allStopsMap.values());
+    if (!effectiveVisibleLineIds) return allStops;
+
+    const lineSet = new Set(effectiveVisibleLineIds);
+    return allStops.filter(
       stop =>
         favSet.has(stop.id) ||
         activeCrowdByStop.has(stop.id) ||
-        stop.id === selectedStopId
+        stop.id === selectedStopId ||
+        stop.lines.some(lineId => lineSet.has(lineId))
     );
-  }, [favoriteStopIds, activeCrowdByStop, selectedStopId]);
+  }, [networkLines, effectiveVisibleLineIds, favoriteStopIds, activeCrowdByStop, selectedStopId]);
 
   return (
     <View style={styles.container}>
@@ -328,11 +363,13 @@ export const TransitMap: React.FC<TransitMapProps> = ({
           </Marker>
         )}
 
-        {/* Interactive DiviAkhaaa Stations ONLY: Favorites (★), Live Crowd Reports, or Selected */}
+        {/* All Clickable Divia Stations (Tram, Liane, Bus) + Favorites (★) + Crowd Badges */}
         {!showControllersOnly &&
-          highlightedStops.map(stop => {
+          visibleStops.map(stop => {
             const isSelected = stop.id === selectedStopId;
             const isFav = favoriteStopIds.includes(stop.id);
+            const isTramStop = stop.lines.includes('T1') || stop.lines.includes('T2');
+            const tramColor = stop.lines.includes('T1') ? '#E11535' : '#4B2982';
             const crowdRep = activeCrowdByStop.get(stop.id);
             const crowdTheme = crowdRep?.crowdLevel
               ? getCrowdBadgeTheme(crowdRep.crowdLevel)
@@ -346,7 +383,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                   longitude: stop.longitude,
                 }}
                 anchor={{ x: 0.5, y: 0.5 }}
-                zIndex={isSelected ? 52 : crowdTheme ? 45 : 42}
+                zIndex={isSelected ? 52 : crowdTheme ? 45 : isFav ? 42 : isTramStop ? 34 : 24}
                 onPress={() => onSelectStop && onSelectStop(stop)}
               >
                 {isFav ? (
@@ -385,39 +422,105 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                       {crowdTheme.label}
                     </Text>
                   </View>
-                ) : (
+                ) : isSelected ? (
                   <View style={styles.selectedStopPin}>
                     <View style={styles.selectedStopPinCore} />
+                  </View>
+                ) : isTramStop ? (
+                  <View style={[styles.tramStationDot, { borderColor: tramColor }]}>
+                    <View style={[styles.tramStationCore, { backgroundColor: tramColor }]} />
+                  </View>
+                ) : (
+                  <View style={styles.busStationDot}>
+                    <View style={styles.busStationCore} />
                   </View>
                 )}
               </Marker>
             );
           })}
 
-        {/* Active Waze Controller Reports Markers (🚨) */}
-        {activeControllerReports.map(report => (
-          <Marker
-            key={report.id}
-            coordinate={{
-              latitude: report.latitude,
-              longitude: report.longitude,
-            }}
-            zIndex={80}
-            onPress={() => onSelectReport(report)}
-          >
-            <View
-              style={[
-                styles.reportMarkerBox,
-                showControllersOnly && styles.reportMarkerEmphasized,
-              ]}
+        {/* Predictive Controller Threat Halo Polylines & Upcoming Threatened Stop Dots */}
+        {trackedControllers.map(({ report, progression }) => {
+          if (
+            !progression ||
+            progression.mode !== 'MOVING' ||
+            progression.alertPolyline.length < 2
+          ) {
+            return null;
+          }
+          const haloCoords = progression.alertPolyline.map(([latitude, longitude]) => ({
+            latitude,
+            longitude,
+          }));
+
+          return (
+            <React.Fragment key={`ctrl-halo-${report.id}`}>
+              <Polyline
+                coordinates={haloCoords}
+                strokeColor="rgba(225, 21, 53, 0.25)"
+                strokeWidth={14}
+                lineCap="round"
+                lineJoin="round"
+                zIndex={73}
+              />
+              <Polyline
+                coordinates={haloCoords}
+                strokeColor="#E11535"
+                strokeWidth={4.5}
+                lineDashPattern={[8, 6]}
+                lineCap="round"
+                lineJoin="round"
+                zIndex={75}
+              />
+              {progression.upcomingStops.map(upStop => (
+                <Marker
+                  key={`ctrl-up-${report.id}-${upStop.stationId}`}
+                  coordinate={{
+                    latitude: upStop.latitude,
+                    longitude: upStop.longitude,
+                  }}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  tracksViewChanges={false}
+                  zIndex={77}
+                  onPress={() => onSelectReport(report)}
+                >
+                  <View style={styles.upcomingAlertDot}>
+                    <Text style={styles.upcomingAlertEta}>{upStop.etaMinutes}m</Text>
+                  </View>
+                </Marker>
+              ))}
+            </React.Fragment>
+          );
+        })}
+
+        {/* Active Waze Controller Reports Markers (🚨) at Live Estimated Position */}
+        {trackedControllers.map(({ report, progression }) => {
+          const lat = progression?.currentLatitude ?? report.latitude;
+          const lng = progression?.currentLongitude ?? report.longitude;
+          return (
+            <Marker
+              key={report.id}
+              coordinate={{ latitude: lat, longitude: lng }}
+              zIndex={82}
+              onPress={() => onSelectReport(report)}
             >
-              <Text style={styles.reportIcon}>🚨</Text>
-              <View style={styles.reportBadge}>
-                <Text style={styles.reportBadgeText}>{report.lineId}</Text>
+              <View
+                style={[
+                  styles.reportMarkerBox,
+                  showControllersOnly && styles.reportMarkerEmphasized,
+                ]}
+              >
+                <Text style={styles.reportIcon}>🚨</Text>
+                <View style={styles.reportBadge}>
+                  <Text style={styles.reportBadgeText}>
+                    {report.lineId}
+                    {progression?.mode === 'MOVING' ? ' ➜' : ''}
+                  </Text>
+                </View>
               </View>
-            </View>
-          </Marker>
-        ))}
+            </Marker>
+          );
+        })}
       </MapView>
 
       {/* Right Floating Controls Stack (above bottom sheet) */}
@@ -555,6 +658,54 @@ const styles = StyleSheet.create({
     height: 6,
     borderRadius: 3,
     backgroundColor: COLORS.cassis,
+  },
+  tramStationDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2.5,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  tramStationCore: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+  },
+  busStationDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#5F6368',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  busStationCore: {
+    width: 3,
+    height: 3,
+    borderRadius: 1.5,
+    backgroundColor: '#5F6368',
+  },
+  upcomingAlertDot: {
+    backgroundColor: '#FEF3F2',
+    borderWidth: 1.5,
+    borderColor: '#E11535',
+    borderRadius: 9,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 3,
+  },
+  upcomingAlertEta: {
+    color: '#B42318',
+    fontSize: 9,
+    fontWeight: '900',
   },
   pinSelectedRing: {
     borderWidth: 3,

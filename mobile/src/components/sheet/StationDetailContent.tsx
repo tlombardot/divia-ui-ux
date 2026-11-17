@@ -7,6 +7,7 @@ import {
 } from '../../data/dijonNetwork';
 import { COLORS } from '../../theme/colors';
 import { Report, TransitStop, UserLocation } from '../../types';
+import { getApproachingControllerAlertsForStation } from '../../utils/controllerTrackingUtils';
 import {
   computeStationCrowdStatus,
   formatCrowdSourceLabel,
@@ -48,7 +49,13 @@ export const StationDetailContent: React.FC<StationDetailContentProps> = ({
     r =>
       r.status === 'active' &&
       (r.type === 'CONTROLLER' || !r.type) &&
-      (r.stopId === stop.id || r.stopName === stop.name)
+      (r.stopId === stop.id ||
+        r.progression?.currentStopId === stop.id ||
+        r.stopName === stop.name)
+  );
+
+  const approachingAlerts = getApproachingControllerAlertsForStation(stop.id, reports).filter(
+    a => a.etaMinutes > 0
   );
 
   const stationCrowd = computeStationCrowdStatus(stop.id, reports, stop.lines[0]);
@@ -145,6 +152,13 @@ export const StationDetailContent: React.FC<StationDetailContentProps> = ({
             </TouchableOpacity>
           )}
         </View>
+
+        {/* Predictive Approaching Controller Warning Banners */}
+        {approachingAlerts.map(pred => (
+          <View key={`pred-${pred.reportId}`} style={styles.predictiveBanner}>
+            <Text style={styles.predictiveBannerText}>{pred.message}</Text>
+          </View>
+        ))}
 
         {/* Active Controller Alerts at this Station */}
         {stopControllerReports.map(rep => {
@@ -399,6 +413,19 @@ const styles = StyleSheet.create({
     borderColor: '#FECDCA',
     borderRadius: 14,
     padding: 12,
+  },
+  predictiveBanner: {
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1.5,
+    borderColor: '#F59E0B',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  predictiveBannerText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#92400E',
   },
   alertHeader: {
     flexDirection: 'row',

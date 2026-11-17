@@ -172,8 +172,10 @@ export const RouteAlternativesContent: React.FC<RouteAlternativesContentProps> =
                   {route.hasControllerAlert && (
                     <View style={styles.alertBanner}>
                       <Text style={styles.alertIcon}>🚨</Text>
-                      <Text style={styles.alertText}>
-                        Contrôleurs signalés ({route.alerts.length})
+                      <Text style={styles.alertText} numberOfLines={2}>
+                        {route.predictiveAlerts && route.predictiveAlerts.length > 0
+                          ? route.predictiveAlerts[0].message
+                          : `Contrôleurs signalés (${route.alerts.length})`}
                       </Text>
                     </View>
                   )}

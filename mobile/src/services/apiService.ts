@@ -163,6 +163,7 @@ export class ApiService {
     latitude: number;
     longitude: number;
     direction: string;
+    directionTerminus?: string;
     description?: string;
     crowdLevel?: CrowdLevel;
   }): Promise<Report | null> {
@@ -190,7 +191,8 @@ export class ApiService {
 
   public async voteReport(
     reportId: string,
-    voteType: 'up' | 'down'
+    voteType: 'up' | 'down',
+    recalibrateStopId?: string
   ): Promise<boolean> {
     try {
       const response = await fetch(`${this.baseUrl}/api/reports/vote`, {
@@ -199,7 +201,7 @@ export class ApiService {
           'Content-Type': 'application/json',
           Accept: 'application/json',
         },
-        body: JSON.stringify({ reportId, voteType }),
+        body: JSON.stringify({ reportId, voteType, recalibrateStopId }),
       });
 
       return response.ok;

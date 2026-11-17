@@ -506,8 +506,8 @@ export default function App() {
         {activeReportCard && (
           <ReportCard
             report={activeReportCard}
-            onVoteUp={reportId => {
-              voteReport(reportId, 'up');
+            onVoteUp={(reportId, recalibrateStopId) => {
+              voteReport(reportId, 'up', recalibrateStopId);
               setActiveReportCard(null);
             }}
             onVoteDown={reportId => {
