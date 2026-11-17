@@ -18,6 +18,19 @@ export interface TransitLine {
   polyline: [number, number][]; // [latitude, longitude]
 }
 
+export type ReportType = 'CONTROLLER' | 'CROWD';
+export type CrowdLevel = 'LOW' | 'MEDIUM' | 'HIGH';
+export type CrowdSource = 'community' | 'estimated';
+
+export interface CrowdStatus {
+  level: CrowdLevel;
+  source: CrowdSource;
+  label: string; // "Calme" | "Chargé" | "Bondé"
+  description: string; // "Places assises" | "Voyage debout" | "Difficile de monter"
+  updatedAt?: number;
+  reportsCount: number;
+}
+
 export type RouteSegmentType = 'WALK' | 'TRANSIT' | 'TRANSFER';
 
 export interface RouteSegment {
@@ -38,6 +51,7 @@ export interface RouteSegment {
   turnInstructions?: string[];
   departureTime?: string;
   arrivalTime?: string;
+  crowdStatus?: CrowdStatus;
 }
 
 // Legacy step interface for backwards compatibility
@@ -71,6 +85,8 @@ export interface RouteOption {
   nextDepartureMinutes: number;
   hasControllerAlert: boolean;
   alerts: Report[];
+  crowdStatus?: CrowdStatus;
+  crowdSummary?: string;
   fullPolyline: [number, number][];
 }
 
@@ -78,6 +94,7 @@ export type ReportStatus = 'active' | 'expired' | 'dismissed';
 
 export interface Report {
   id: string;
+  type: ReportType;
   stopId: string;
   stopName: string;
   lineId: string;
@@ -86,12 +103,30 @@ export interface Report {
   longitude: number;
   direction: string;
   description?: string;
+  crowdLevel?: CrowdLevel;
   reportedAt: number; // Unix timestamp ms
-  expiresAt: number; // Unix timestamp ms (TTL 40 min default)
+  expiresAt: number; // Unix timestamp ms (40 min CONTROLLER / 25 min CROWD)
   upvotes: number; // "Toujours là"
   downvotes: number; // "Partis"
   reliabilityScore: number; // 0 - 100
   status: ReportStatus;
+}
+
+export interface StationDeparture {
+  lineId: string;
+  lineName: string;
+  lineColor: string;
+  direction: string;
+  nextMinutes: [number, number];
+  crowdStatus: CrowdStatus;
+}
+
+export interface StationDeparturesResponse {
+  station: TransitStop;
+  crowdStatus: CrowdStatus;
+  departures: StationDeparture[];
+  controllerAlerts: Report[];
+  updatedAt: number;
 }
 
 // Zod validation schemas (OWASP: Strict Input Validation — 25 km Grand Dijon bounds)
@@ -112,16 +147,26 @@ export const routeQuerySchema = z.object({
 
 export type RouteQuery = z.infer<typeof routeQuerySchema>;
 
-export const createReportSchema = z.object({
-  stopId: z.string().min(1).max(64),
-  stopName: z.string().min(1).max(128).trim(),
-  lineId: z.string().min(1).max(16),
-  lineName: z.string().min(1).max(64).trim(),
-  latitude: z.number().min(47.08).max(47.56),
-  longitude: z.number().min(4.70).max(5.38),
-  direction: z.string().min(1).max(128).trim(),
-  description: z.string().max(256).trim().optional(),
-});
+export const createReportSchema = z
+  .object({
+    type: z.enum(['CONTROLLER', 'CROWD']).default('CONTROLLER'),
+    stopId: z.string().min(1).max(64),
+    stopName: z.string().min(1).max(128).trim(),
+    lineId: z.string().min(1).max(16).default('ALL'),
+    lineName: z.string().min(1).max(64).trim().default('Toutes lignes'),
+    latitude: z.number().min(47.08).max(47.56),
+    longitude: z.number().min(4.70).max(5.38),
+    direction: z.string().min(1).max(128).trim().default('Station / Quai'),
+    description: z.string().max(256).trim().optional(),
+    crowdLevel: z.enum(['LOW', 'MEDIUM', 'HIGH']).optional(),
+  })
+  .refine(
+    data => data.type !== 'CROWD' || data.crowdLevel !== undefined,
+    {
+      message: 'Le niveau d\'affluence (LOW, MEDIUM, HIGH) est obligatoire pour un signalement CROWD.',
+      path: ['crowdLevel'],
+    }
+  );
 
 export type CreateReportInput = z.infer<typeof createReportSchema>;
 

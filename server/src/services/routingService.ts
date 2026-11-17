@@ -4,6 +4,8 @@ import {
   findNearbyStops,
 } from '../data/dijonNetwork';
 import {
+  CrowdLevel,
+  CrowdStatus,
   Report,
   RouteOption,
   RouteQuery,
@@ -96,13 +98,48 @@ function findDirectLineSegment(
 }
 
 /**
- * Trouver les signalements Waze actifs sur un trajet
+ * Trouver les signalements contrôleurs Waze actifs sur un trajet
  */
 function findMatchingReports(linesUsed: string[], stopsUsed: string[]): Report[] {
-  const activeReports = reportService.getActiveReports();
+  const activeReports = reportService.getActiveControllerReports();
   return activeReports.filter(
     rep => linesUsed.includes(rep.lineId) || stopsUsed.includes(rep.stopId)
   );
+}
+
+function crowdRank(level: CrowdLevel): number {
+  return level === 'HIGH' ? 3 : level === 'MEDIUM' ? 2 : 1;
+}
+
+function summarizeRouteCrowd(
+  segments: RouteSegment[]
+): { crowdStatus?: CrowdStatus; crowdSummary?: string } {
+  const transitSegs = segments.filter(s => s.type === 'TRANSIT' && s.crowdStatus);
+  if (transitSegs.length === 0) return {};
+
+  let worstSeg = transitSegs[0];
+  for (const seg of transitSegs) {
+    if (
+      seg.crowdStatus &&
+      worstSeg.crowdStatus &&
+      crowdRank(seg.crowdStatus.level) > crowdRank(worstSeg.crowdStatus.level)
+    ) {
+      worstSeg = seg;
+    }
+  }
+
+  const status = worstSeg.crowdStatus!;
+  const lineLabel = worstSeg.lineId || 'Divia';
+  const vehicleWord = lineLabel.startsWith('T') ? 'Rame' : 'Bus';
+
+  const crowdSummary =
+    status.level === 'HIGH'
+      ? `${vehicleWord} bondé${vehicleWord === 'Rame' ? 'e' : ''} sur ${lineLabel}`
+      : status.level === 'MEDIUM'
+        ? `${vehicleWord} chargé${vehicleWord === 'Rame' ? 'e' : ''} sur ${lineLabel}`
+        : `Trajet calme sur ${lineLabel}`;
+
+  return { crowdStatus: status, crowdSummary };
 }
 
 /**
@@ -297,6 +334,7 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
         ]);
 
         const stopTimes = generateEstimatedStopTimes(boardingTime, stopCount);
+        const legCrowdStatus = reportService.getStationCrowdStatus(dep.stop.id, line.id, now);
 
         const segments: RouteSegment[] = [
           {
@@ -327,6 +365,7 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
             estimatedStopTimes: stopTimes,
             departureTime: formatTime(boardingTime),
             arrivalTime: formatTime(alightingTime),
+            crowdStatus: legCrowdStatus,
           },
           {
             type: 'WALK',
@@ -351,6 +390,7 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
           [line.id],
           lineSeg.stops.map(s => s.id)
         );
+        const { crowdStatus, crowdSummary } = summarizeRouteCrowd(segments);
 
         routes.push({
           id: `route-direct-${line.id}-${dep.stop.id}-${arr.stop.id}`,
@@ -367,6 +407,8 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
           nextDepartureMinutes: nextDepMinutes,
           hasControllerAlert: matchingAlerts.length > 0,
           alerts: matchingAlerts,
+          crowdStatus,
+          crowdSummary,
           fullPolyline,
           segments,
           steps: mapSegmentsToSteps(segments),
@@ -438,6 +480,8 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
 
             const stopTimesA = generateEstimatedStopTimes(boardingTimeA, stopsCountA);
             const stopTimesB = generateEstimatedStopTimes(boardingTimeB, stopsCountB);
+            const crowdStatusA = reportService.getStationCrowdStatus(dep.stop.id, lineA.id, now);
+            const crowdStatusB = reportService.getStationCrowdStatus(hubStopB.id, lineB.id, now);
 
             const segments: RouteSegment[] = [
               {
@@ -468,6 +512,7 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
                 estimatedStopTimes: stopTimesA,
                 departureTime: formatTime(boardingTimeA),
                 arrivalTime: formatTime(arrivalHubA),
+                crowdStatus: crowdStatusA,
               },
               {
                 type: 'TRANSFER',
@@ -498,6 +543,7 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
                 estimatedStopTimes: stopTimesB,
                 departureTime: formatTime(boardingTimeB),
                 arrivalTime: formatTime(alightingTimeB),
+                crowdStatus: crowdStatusB,
               },
               {
                 type: 'WALK',
@@ -521,6 +567,7 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
 
             const allStops = [...legA.stops, ...legB.stops].map(s => s.id);
             const matchingAlerts = findMatchingReports([lineA.id, lineB.id], allStops);
+            const { crowdStatus, crowdSummary } = summarizeRouteCrowd(segments);
 
             routes.push({
               id: `route-transfer-${lineA.id}-${lineB.id}-${hubId}`,
@@ -537,6 +584,8 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
               nextDepartureMinutes: nextDepMinA,
               hasControllerAlert: matchingAlerts.length > 0,
               alerts: matchingAlerts,
+              crowdStatus,
+              crowdSummary,
               fullPolyline,
               segments,
               steps: mapSegmentsToSteps(segments),

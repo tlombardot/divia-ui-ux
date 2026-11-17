@@ -5,12 +5,17 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import http from 'http';
 import { Server, Socket } from 'socket.io';
-import { ALL_DIJON_STOPS, DIJON_LINES } from './data/dijonNetwork';
+import { ALL_DIJON_STOPS, DIJON_LINES, getLineById, getStopById } from './data/dijonNetwork';
 import { reportService } from './services/reportService';
-import { calculateRoutes } from './services/routingService';
+import {
+  calculateRoutes,
+  getLineHeadwayMinutes,
+  getNextDepartureEstimate,
+} from './services/routingService';
 import {
   createReportSchema,
   routeQuerySchema,
+  StationDeparture,
   voteReportSchema,
 } from './types';
 
@@ -88,6 +93,76 @@ app.get('/api/network/stops', (_req: Request, res: Response) => {
   res.status(200).json({ stops: ALL_DIJON_STOPS });
 });
 
+// Real-time station departures + crowd + controller alerts
+app.get('/api/stations/:id/departures', (req: Request, res: Response) => {
+  const stationId = String(req.params.id || '').trim();
+  const station = getStopById(stationId);
+
+  if (!station) {
+    res.status(404).json({ error: 'Station introuvable sur le réseau Divia' });
+    return;
+  }
+
+  const now = new Date();
+  const departures: StationDeparture[] = [];
+
+  for (const lineId of station.lines) {
+    const line = getLineById(lineId);
+    if (!line || line.stops.length < 2) continue;
+
+    const firstDep = getNextDepartureEstimate(lineId, now);
+    const headway = getLineHeadwayMinutes(lineId, now);
+    const crowdStatus = reportService.getStationCrowdStatus(station.id, lineId, now);
+
+    const terminusA = line.stops[line.stops.length - 1].name;
+    const terminusB = line.stops[0].name;
+
+    departures.push({
+      lineId: line.id,
+      lineName: line.name,
+      lineColor: line.color,
+      direction: `Vers ${terminusA}`,
+      nextMinutes: [firstDep, firstDep + headway],
+      crowdStatus,
+    });
+
+    departures.push({
+      lineId: line.id,
+      lineName: line.name,
+      lineColor: line.color,
+      direction: `Vers ${terminusB}`,
+      nextMinutes: [firstDep + 2, firstDep + 2 + headway],
+      crowdStatus,
+    });
+  }
+
+  const stationCrowdStatus = reportService.getStationCrowdStatus(
+    station.id,
+    station.lines[0],
+    now
+  );
+  const controllerAlerts = reportService
+    .getActiveControllerReports(now.getTime())
+    .filter(rep => rep.stopId === station.id || station.lines.includes(rep.lineId));
+
+  res.status(200).json({
+    station,
+    crowdStatus: stationCrowdStatus,
+    departures,
+    controllerAlerts,
+    updatedAt: now.getTime(),
+  });
+});
+
+// Crowd map for all Dijon stations
+app.get('/api/crowd', (_req: Request, res: Response) => {
+  res.status(200).json({
+    crowdMap: reportService.getAllStationsCrowdMap(),
+    reports: reportService.getActiveCrowdReports(),
+    updatedAt: Date.now(),
+  });
+});
+
 // Route calculation
 app.get('/api/routes', async (req: Request, res: Response) => {
   const parseResult = routeQuerySchema.safeParse(req.query);
@@ -129,6 +204,12 @@ app.post('/api/reports', (req: Request, res: Response) => {
 
   const newReport = reportService.createReport(parseResult.data);
   io.emit('report:new', newReport);
+  if (newReport.type === 'CROWD') {
+    io.emit('crowd:updated', {
+      stopId: newReport.stopId,
+      crowdStatus: reportService.getStationCrowdStatus(newReport.stopId, newReport.lineId),
+    });
+  }
 
   res.status(201).json({ report: newReport });
 });
@@ -221,6 +302,12 @@ io.on('connection', (socket: Socket) => {
 
     const report = reportService.createReport(parseResult.data);
     io.emit('report:new', report);
+    if (report.type === 'CROWD') {
+      io.emit('crowd:updated', {
+        stopId: report.stopId,
+        crowdStatus: reportService.getStationCrowdStatus(report.stopId, report.lineId),
+      });
+    }
   });
 
   // Handle real-time report vote
