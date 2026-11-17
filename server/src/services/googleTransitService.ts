@@ -739,20 +739,47 @@ export function getNextWednesdayTenAmParisIso(baseDate: Date = new Date()): stri
   return d.toISOString();
 }
 
+export interface GoogleExtractedStopCoord {
+  name: string;
+  latitude: number;
+  longitude: number;
+}
+
+export interface GoogleExtractedLineShape {
+  polyline: [number, number][];
+  googleStops: GoogleExtractedStopCoord[];
+}
+
+function doesGoogleTransitLineMatch(
+  targetLineId: string,
+  nameShort?: string,
+  name?: string
+): boolean {
+  const target = targetLineId.toUpperCase().trim();
+  const shortNorm = (nameShort || '').toUpperCase().trim();
+  if (shortNorm === target) return true;
+
+  const fullNorm = (name || '').toUpperCase().trim();
+  if (!fullNorm) return false;
+
+  // Match exact token (e.g. "Bus B12", "Ligne B10", "T1") without confusing B1 with B10
+  const regex = new RegExp(`(^|[^A-Z0-9])${target}($|[^A-Z0-9])`);
+  return regex.test(fullNorm);
+}
+
 /**
- * Extract the exact official TRANSIT polyline for a single Divia line (e.g. T1, T2, L5, B10, B12, B13)
- * by issuing one Google Routes API TRANSIT request between its termini at Wednesday 10:00 Paris time.
+ * Extract the exact official TRANSIT polyline & Google stop coordinates for one chunk
+ * between `origin` and `destination`, strictly matching `lineId`.
  */
-export async function fetchGoogleTransitLinePolyline(
+export async function fetchGoogleTransitLineChunk(
   lineId: string,
   origin: GoogleLatLng,
   destination: GoogleLatLng,
   category: 'TRAM' | 'LIANE' | 'BUS'
-): Promise<[number, number][] | null> {
+): Promise<GoogleExtractedLineShape | null> {
   const apiKey = process.env.GOOGLE_MAPS_API_KEY?.trim();
   if (!apiKey) return null;
 
-  const targetLine = lineId.toUpperCase().trim();
   const allowedTravelModes = category === 'TRAM' ? ['LIGHT_RAIL'] : ['BUS'];
 
   const requestBody = {
@@ -780,7 +807,7 @@ export async function fetchGoogleTransitLinePolyline(
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': apiKey,
         'X-Goog-FieldMask':
-          'routes.legs.steps.travelMode,routes.legs.steps.polyline.encodedPolyline,routes.legs.steps.transitDetails.transitLine',
+          'routes.legs.steps.travelMode,routes.legs.steps.polyline.encodedPolyline,routes.legs.steps.transitDetails',
       },
       body: JSON.stringify(requestBody),
     });
@@ -791,31 +818,145 @@ export async function fetchGoogleTransitLinePolyline(
     const data = (await response.json()) as GoogleComputeRoutesResponse;
     if (!data.routes || data.routes.length === 0) return null;
 
-    let bestPolyline: [number, number][] | null = null;
+    let bestPoly: [number, number][] | null = null;
+    let bestStops: GoogleExtractedStopCoord[] = [];
 
     for (const route of data.routes) {
       const steps = route.legs?.[0]?.steps || [];
       for (const step of steps) {
         if (step.travelMode !== 'TRANSIT' || !step.polyline?.encodedPolyline) continue;
-        const shortName = (
-          step.transitDetails?.transitLine?.nameShort ||
-          step.transitDetails?.transitLine?.name ||
-          ''
-        )
-          .toUpperCase()
-          .trim();
 
-        if (shortName === targetLine || shortName.endsWith(targetLine)) {
-          const decoded = decodeGooglePolyline(step.polyline.encodedPolyline);
-          if (decoded.length >= 6 && (!bestPolyline || decoded.length > bestPolyline.length)) {
-            bestPolyline = decoded;
+        const matches = doesGoogleTransitLineMatch(
+          lineId,
+          step.transitDetails?.transitLine?.nameShort,
+          step.transitDetails?.transitLine?.name
+        );
+        if (!matches) continue;
+
+        const decoded = decodeGooglePolyline(step.polyline.encodedPolyline);
+        if (decoded.length >= 2 && (!bestPoly || decoded.length > bestPoly.length)) {
+          bestPoly = decoded;
+          const stopsExtracted: GoogleExtractedStopCoord[] = [];
+          const dep = step.transitDetails?.stopDetails?.departureStop;
+          const arr = step.transitDetails?.stopDetails?.arrivalStop;
+          if (
+            dep?.name &&
+            dep.location?.latLng?.latitude !== undefined &&
+            dep.location?.latLng?.longitude !== undefined
+          ) {
+            stopsExtracted.push({
+              name: dep.name,
+              latitude: dep.location.latLng.latitude,
+              longitude: dep.location.latLng.longitude,
+            });
           }
+          if (
+            arr?.name &&
+            arr.location?.latLng?.latitude !== undefined &&
+            arr.location?.latLng?.longitude !== undefined
+          ) {
+            stopsExtracted.push({
+              name: arr.name,
+              latitude: arr.location.latLng.latitude,
+              longitude: arr.location.latLng.longitude,
+            });
+          }
+          bestStops = stopsExtracted;
         }
       }
     }
 
-    return bestPolyline;
+    return bestPoly ? { polyline: bestPoly, googleStops: bestStops } : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Extract the full street-by-street / rail-by-rail Google Transit polyline for a line
+ * by splitting its ordered stops into sub-chunks of 3 to 4 consecutive stops (so Google
+ * returns direct B10/B12/B13/L3..L6/T1..T2 segments instead of suggesting downtown transfers).
+ */
+export async function fetchGoogleTransitLineByChunks(
+  lineId: string,
+  orderedStops: TransitStop[],
+  category: 'TRAM' | 'LIANE' | 'BUS'
+): Promise<GoogleExtractedLineShape | null> {
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY?.trim();
+  if (!apiKey || orderedStops.length < 2) return null;
+
+  // Build overlapping sub-chunks of 3 stops stride (covering 4 consecutive stops each)
+  const chunkRanges: Array<[number, number]> = [];
+  const stride = 3;
+  let cursor = 0;
+  while (cursor < orderedStops.length - 1) {
+    const nextIdx = Math.min(cursor + stride, orderedStops.length - 1);
+    chunkRanges.push([cursor, nextIdx]);
+    cursor = nextIdx;
+  }
+
+  const stitchedPolyline: [number, number][] = [];
+  const extractedStops: GoogleExtractedStopCoord[] = [];
+
+  for (const [startIdx, endIdx] of chunkRanges) {
+    const stopA = orderedStops[startIdx];
+    const stopB = orderedStops[endIdx];
+    const chunk = await fetchGoogleTransitLineChunk(
+      lineId,
+      { latitude: stopA.latitude, longitude: stopA.longitude },
+      { latitude: stopB.latitude, longitude: stopB.longitude },
+      category
+    );
+
+    if (chunk && chunk.polyline.length >= 2) {
+      appendPolylineCoords(stitchedPolyline, chunk.polyline);
+      extractedStops.push(...chunk.googleStops);
+    } else if (endIdx - startIdx > 1) {
+      // Split failed chunk into smaller pairs to preserve B10/B12/B13 coverage
+      for (let k = startIdx; k < endIdx; k++) {
+        const subA = orderedStops[k];
+        const subB = orderedStops[k + 1];
+        const subChunk = await fetchGoogleTransitLineChunk(
+          lineId,
+          { latitude: subA.latitude, longitude: subA.longitude },
+          { latitude: subB.latitude, longitude: subB.longitude },
+          category
+        );
+        if (subChunk && subChunk.polyline.length >= 2) {
+          appendPolylineCoords(stitchedPolyline, subChunk.polyline);
+          extractedStops.push(...subChunk.googleStops);
+        }
+      }
+    }
+  }
+
+  if (stitchedPolyline.length < 6) {
+    // Fallback to full terminus-to-terminus single call
+    const first = orderedStops[0];
+    const last = orderedStops[orderedStops.length - 1];
+    return fetchGoogleTransitLineChunk(
+      lineId,
+      { latitude: first.latitude, longitude: first.longitude },
+      { latitude: last.latitude, longitude: last.longitude },
+      category
+    );
+  }
+
+  return {
+    polyline: stitchedPolyline,
+    googleStops: extractedStops,
+  };
+}
+
+/**
+ * Legacy convenience wrapper returning only the polyline for a line
+ */
+export async function fetchGoogleTransitLinePolyline(
+  lineId: string,
+  origin: GoogleLatLng,
+  destination: GoogleLatLng,
+  category: 'TRAM' | 'LIANE' | 'BUS'
+): Promise<[number, number][] | null> {
+  const res = await fetchGoogleTransitLineChunk(lineId, origin, destination, category);
+  return res ? res.polyline : null;
 }

@@ -7,16 +7,21 @@ import {
 } from '../data/dijonNetwork';
 import { LineCategory, ShapeSource, TransitLine, TransitStop } from '../types';
 import {
+  computePolylineLengthMeters,
   densifyPolyline,
   LatLng,
   routeOnTramRailGraph,
   snapStopToPolyline,
   stitchWays,
 } from '../utils/geometryTopology';
-import { fetchGoogleTransitLinePolyline } from './googleTransitService';
+import {
+  fetchGoogleTransitLineByChunks,
+  GoogleExtractedStopCoord,
+} from './googleTransitService';
 
 export interface NetworkShapesCachePayload {
   version: number;
+  cacheVersion: number;
   generatedAt: number;
   lines: TransitLine[];
   stops: TransitStop[];
@@ -63,7 +68,9 @@ interface OSRMRouteResponse {
   }>;
 }
 
-export const NETWORK_CACHE_VERSION = 4;
+export const NETWORK_CACHE_VERSION = 5;
+export const SHAPES_CACHE_VERSION = 2; // Mandatory cacheVersion: 2 invalidation gate
+const MIN_HIGH_DENSITY_POINTS = 31; // > 30 points required for B10/B12/B13 & all lines
 const REQUIRED_LINE_IDS = ['T1', 'T2', 'L3', 'L4', 'L5', 'L6', 'B10', 'B12', 'B13'];
 const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
@@ -83,8 +90,22 @@ function normalizeName(name: string): string {
 }
 
 /**
- * Downsample overly dense polylines while preserving sharp geometry & < 140m continuity
+ * Ensure every line polyline is clean, continuous, and high-density (> 30 vertices)
+ * so snapping and interpolation along curves stay accurate on all 9 lines (T1..B13).
  */
+function ensureHighDensityPolyline(
+  points: LatLng[],
+  maxJumpMeters: number = 145
+): LatLng[] {
+  const sanitized = sanitizeContinuousPolyline(points, maxJumpMeters);
+  if (sanitized.length >= MIN_HIGH_DENSITY_POINTS) {
+    return sanitized;
+  }
+  const totalMeters = computePolylineLengthMeters(sanitized);
+  if (totalMeters <= 0) return sanitized;
+  const targetStep = Math.max(15, Math.floor(totalMeters / (MIN_HIGH_DENSITY_POINTS + 4)));
+  return densifyPolyline(sanitized, Math.min(115, targetStep));
+}
 function sanitizeContinuousPolyline(
   points: LatLng[],
   maxJumpMeters: number = 145
@@ -123,6 +144,7 @@ export class NetworkGeometryService {
 
       if (
         parsed &&
+        parsed.cacheVersion === SHAPES_CACHE_VERSION &&
         parsed.version === NETWORK_CACHE_VERSION &&
         Array.isArray(parsed.lines) &&
         parsed.lines.length === DIJON_LINES.length
@@ -130,7 +152,10 @@ export class NetworkGeometryService {
         const lineIds = new Set(parsed.lines.map(l => l.id));
         const hasAllRequiredLines = REQUIRED_LINE_IDS.every(id => {
           const found = parsed.lines.find(l => l.id === id);
-          return lineIds.has(id) && Boolean(found && found.polyline.length >= 2);
+          return (
+            lineIds.has(id) &&
+            Boolean(found && found.polyline.length >= MIN_HIGH_DENSITY_POINTS)
+          );
         });
         if (hasAllRequiredLines) {
           return parsed;
@@ -389,12 +414,15 @@ export class NetworkGeometryService {
 
   /**
    * Generate full topological network shapes & aligned stations:
-   * 1. Primary: Official Google Routes API v2 (TRANSIT) once per line (when API key is set)
-   * 2. Fallback: Overpass OSM tram rails / bus relations + guarded OSRM / densified rail waypoints
-   * Saved to server/data/network-shapes-cache.json so subsequent restarts consume 0 quota.
+   * 1. Primary: Official Google Routes API v2 (TRANSIT) chunked extraction (3-4 stops/chunk)
+   *    guaranteeing direct street-by-street B10/B12/B13/L3..L6/T1..T2 shapes + Google stop coords
+   * 2. Fallback: Overpass OSM tram rails / bus relations + guarded OSRM / densified waypoints
+   * 3. Mandatory orthogonal Snap-to-Polyline on every station with distanceAlongLineMeters
+   * Saved to server/data/network-shapes-cache.json with cacheVersion: 2.
    */
   public async generateNetworkShapes(): Promise<NetworkShapesCachePayload> {
     const googleLinesMap = new Map<string, LatLng[]>();
+    const googleStopsByLine = new Map<string, GoogleExtractedStopCoord[]>();
     const hasGoogleKey = Boolean(
       this.allowExternalFetch && process.env.GOOGLE_MAPS_API_KEY?.trim()
     );
@@ -402,18 +430,19 @@ export class NetworkGeometryService {
     if (hasGoogleKey) {
       await Promise.all(
         DIJON_LINES.map(async line => {
-          const firstStop = line.stops[0];
-          const lastStop = line.stops[line.stops.length - 1];
-          if (!firstStop || !lastStop) return;
+          if (line.stops.length < 2) return;
 
-          const googlePoly = await fetchGoogleTransitLinePolyline(
+          const extracted = await fetchGoogleTransitLineByChunks(
             line.id,
-            { latitude: firstStop.latitude, longitude: firstStop.longitude },
-            { latitude: lastStop.latitude, longitude: lastStop.longitude },
+            line.stops,
             line.category
           );
-          if (googlePoly && googlePoly.length >= 6) {
-            googleLinesMap.set(line.id, sanitizeContinuousPolyline(googlePoly, 145));
+          if (extracted && extracted.polyline.length >= 6) {
+            googleLinesMap.set(
+              line.id,
+              ensureHighDensityPolyline(extracted.polyline, 145)
+            );
+            googleStopsByLine.set(line.id, extracted.googleStops);
           }
         })
       );
@@ -433,14 +462,22 @@ export class NetworkGeometryService {
     const enrichedLines: TransitLine[] = [];
 
     for (const line of DIJON_LINES) {
-      const osmAlignedStops = this.enrichStopsWithOsm(line.stops, osmStops);
+      const googleStopHints = (googleStopsByLine.get(line.id) || []).map(gs => ({
+        name: gs.name,
+        lat: gs.latitude,
+        lon: gs.longitude,
+      }));
+      const refinedStops = this.enrichStopsWithOsm(
+        line.stops,
+        googleStopHints.length > 0 ? googleStopHints : osmStops
+      );
       const startHint: LatLng = [
-        osmAlignedStops[0].latitude,
-        osmAlignedStops[0].longitude,
+        refinedStops[0].latitude,
+        refinedStops[0].longitude,
       ];
       const endHint: LatLng = [
-        osmAlignedStops[osmAlignedStops.length - 1].latitude,
-        osmAlignedStops[osmAlignedStops.length - 1].longitude,
+        refinedStops[refinedStops.length - 1].latitude,
+        refinedStops[refinedStops.length - 1].longitude,
       ];
 
       let forwardPolyline: LatLng[] = [];
@@ -448,12 +485,12 @@ export class NetworkGeometryService {
       let shapeSource: ShapeSource = 'fallback';
 
       // =======================================================================
-      // 0. PRIMARY: Official Google Routes API v2 TRANSIT shape (cached once)
+      // 0. PRIMARY: Official Google Routes API v2 TRANSIT chunked shape
       // =======================================================================
       const googlePoly = googleLinesMap.get(line.id);
       if (googlePoly && googlePoly.length >= 6) {
-        forwardPolyline = googlePoly;
-        returnPolyline = [...googlePoly].reverse();
+        forwardPolyline = ensureHighDensityPolyline(googlePoly, 145);
+        returnPolyline = [...forwardPolyline].reverse();
         shapeSource = 'google_routes';
       } else if (line.category === 'TRAM') {
         // =====================================================================
@@ -464,14 +501,14 @@ export class NetworkGeometryService {
         if (relations.length > 0) {
           const stitchedFwd = stitchWays(relations[0], 15, 150, startHint);
           if (stitchedFwd.length >= 10) {
-            forwardPolyline = sanitizeContinuousPolyline(stitchedFwd, 145);
+            forwardPolyline = ensureHighDensityPolyline(stitchedFwd, 145);
             shapeSource = 'overpass';
 
             if (relations.length >= 2) {
               const stitchedRet = stitchWays(relations[1], 15, 150, endHint);
               returnPolyline =
                 stitchedRet.length >= 10
-                  ? sanitizeContinuousPolyline(stitchedRet, 145)
+                  ? ensureHighDensityPolyline(stitchedRet, 145)
                   : [...forwardPolyline].reverse();
             } else {
               returnPolyline = [...forwardPolyline].reverse();
@@ -481,21 +518,21 @@ export class NetworkGeometryService {
 
         // Local Dijkstra rail graph fallback strictly over `railway=tram` ways
         if (forwardPolyline.length < 10 && tramRailWays.length > 0) {
-          const railPath = routeOnTramRailGraph(tramRailWays, osmAlignedStops);
+          const railPath = routeOnTramRailGraph(tramRailWays, refinedStops);
           if (railPath && railPath.length >= 10) {
-            forwardPolyline = sanitizeContinuousPolyline(railPath, 145);
+            forwardPolyline = ensureHighDensityPolyline(railPath, 145);
             returnPolyline = [...forwardPolyline].reverse();
             shapeSource = 'overpass_rail_graph';
           }
         }
 
-        // Clean densified fallback along exact Dijon tram rail waypoints (never OSRM car!)
+        // Clean high-density fallback along exact Dijon tram rail waypoints (never OSRM car!)
         if (forwardPolyline.length < 2) {
           const baseRailWaypoints =
-            line.polyline.length >= osmAlignedStops.length
+            line.polyline.length >= refinedStops.length
               ? line.polyline
-              : osmAlignedStops.map(s => [s.latitude, s.longitude] as LatLng);
-          forwardPolyline = densifyPolyline(baseRailWaypoints, 115);
+              : refinedStops.map(s => [s.latitude, s.longitude] as LatLng);
+          forwardPolyline = ensureHighDensityPolyline(baseRailWaypoints, 115);
           returnPolyline = [...forwardPolyline].reverse();
           shapeSource = 'fallback';
         }
@@ -508,14 +545,14 @@ export class NetworkGeometryService {
         if (relations.length > 0) {
           const stitchedFwd = stitchWays(relations[0], 15, 150, startHint);
           if (stitchedFwd.length >= 6) {
-            forwardPolyline = sanitizeContinuousPolyline(stitchedFwd, 145);
+            forwardPolyline = ensureHighDensityPolyline(stitchedFwd, 145);
             shapeSource = 'overpass';
 
             if (relations.length >= 2) {
               const stitchedRet = stitchWays(relations[1], 15, 150, endHint);
               returnPolyline =
                 stitchedRet.length >= 6
-                  ? sanitizeContinuousPolyline(stitchedRet, 145)
+                  ? ensureHighDensityPolyline(stitchedRet, 145)
                   : [...forwardPolyline].reverse();
             } else {
               returnPolyline = [...forwardPolyline].reverse();
@@ -525,17 +562,22 @@ export class NetworkGeometryService {
 
         // Guarded OSRM bus fallback (rejects > 1.75x detours)
         if (forwardPolyline.length < 6) {
-          forwardPolyline = await this.buildGuardedBusFallbackPolyline(osmAlignedStops);
-          returnPolyline = await this.buildGuardedBusFallbackPolyline(
-            [...osmAlignedStops].reverse()
+          forwardPolyline = ensureHighDensityPolyline(
+            await this.buildGuardedBusFallbackPolyline(refinedStops),
+            145
+          );
+          returnPolyline = ensureHighDensityPolyline(
+            await this.buildGuardedBusFallbackPolyline([...refinedStops].reverse()),
+            145
           );
           shapeSource = this.allowExternalFetch ? 'osrm' : 'fallback';
         }
       }
 
-      // Snap every station cleanly onto the line's rail/street polyline
-      const snappedStops = osmAlignedStops.map(stop =>
-        snapStopToPolyline(stop, forwardPolyline, 350)
+      // Snap EVERY station orthogonally onto this line's polyline (0m perpendicular distance)
+      // and record polylineVertexIndex + distanceAlongLineMeters
+      const snappedStops = refinedStops.map(stop =>
+        snapStopToPolyline(stop, forwardPolyline, 2000)
       );
 
       enrichedLines.push({
@@ -559,6 +601,7 @@ export class NetworkGeometryService {
 
     const payload: NetworkShapesCachePayload = {
       version: NETWORK_CACHE_VERSION,
+      cacheVersion: SHAPES_CACHE_VERSION,
       generatedAt: Date.now(),
       lines: enrichedLines,
       stops: Array.from(snappedStopMap.values()),
@@ -574,6 +617,7 @@ export class NetworkGeometryService {
     forceRefresh?: boolean;
   }): Promise<{
     version: number;
+    cacheVersion: number;
     lines: TransitLine[];
     stops: TransitStop[];
     cachedAt: number;
@@ -610,6 +654,7 @@ export class NetworkGeometryService {
 
     return {
       version: payload.version,
+      cacheVersion: payload.cacheVersion,
       lines: filteredLines,
       stops: payload.stops || ALL_DIJON_STOPS,
       cachedAt: payload.generatedAt,

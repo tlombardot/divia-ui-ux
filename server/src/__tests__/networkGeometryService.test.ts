@@ -11,6 +11,7 @@ import { getNextWednesdayTenAmParisIso } from '../services/googleTransitService'
 import {
   NETWORK_CACHE_VERSION,
   NetworkGeometryService,
+  SHAPES_CACHE_VERSION,
 } from '../services/networkGeometryService';
 import { networkShapesQuerySchema, stationsQuerySchema } from '../types';
 import {
@@ -229,5 +230,44 @@ describe('NetworkGeometryService — Official Palette, Continuity & Disk Cache',
     expect(regenerated.lines.map(l => l.id)).toEqual(
       expect.arrayContaining(['B10', 'B12', 'B13'])
     );
+  });
+
+  it('guarantees >30 polyline vertices on ALL 9 lines (T1..B13), snaps every stop to 0m of its line, and enforces cacheVersion=2', async () => {
+    const svc = new NetworkGeometryService({
+      cacheFilePath: tempCachePath,
+      allowExternalFetch: false,
+    });
+
+    const result = await svc.getNetworkShapes();
+    expect(result.cacheVersion).toBe(SHAPES_CACHE_VERSION);
+    expect(result.cacheVersion).toBe(2);
+    expect(result.lines).toHaveLength(9);
+
+    for (const line of result.lines) {
+      expect(line.polyline.length).toBeGreaterThan(30);
+      for (const stop of line.stops) {
+        const proj = projectPointOntoPolyline([stop.latitude, stop.longitude], line.polyline);
+        expect(Math.round(proj.distanceMeters)).toBe(0);
+        expect(stop.polylineVertexIndex).toBeTypeOf('number');
+        expect(stop.distanceAlongLineMeters).toBeTypeOf('number');
+      }
+    }
+
+    // Write stale cacheVersion: 1 -> must auto-invalidate and regenerate
+    fs.writeFileSync(
+      tempCachePath,
+      JSON.stringify({
+        version: NETWORK_CACHE_VERSION,
+        cacheVersion: 1,
+        generatedAt: Date.now(),
+        lines: result.lines,
+        stops: result.stops,
+      }),
+      'utf-8'
+    );
+    svc.clearMemoryCache();
+    const regenerated = await svc.getNetworkShapes();
+    expect(regenerated.fromCache).toBe(false);
+    expect(regenerated.cacheVersion).toBe(2);
   });
 });

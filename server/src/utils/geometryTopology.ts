@@ -98,24 +98,162 @@ export function projectPointOntoPolyline(
 }
 
 /**
+ * Compute cumulative distances in meters along a polyline (cum[0] = 0)
+ */
+export function computeCumulativeDistances(polyline: LatLng[]): number[] {
+  if (polyline.length === 0) return [];
+  const cum: number[] = [0];
+  let total = 0;
+  for (let i = 0; i < polyline.length - 1; i++) {
+    total += calculateDistanceMeters(
+      polyline[i][0],
+      polyline[i][1],
+      polyline[i + 1][0],
+      polyline[i + 1][1]
+    );
+    cum.push(total);
+  }
+  return cum;
+}
+
+/**
+ * Orthogonally project a GPS coordinate onto the closest segment of `polyline`,
+ * returning exact snapped coordinate, nearest vertex index, and cumulative distance from terminus A.
+ */
+export function snapPointToPolyline(
+  pt: LatLng,
+  polyline: LatLng[]
+): {
+  projected: LatLng;
+  distanceMeters: number;
+  polylineVertexIndex: number;
+  distanceAlongLineMeters: number;
+} {
+  if (polyline.length < 2) {
+    const fallback = polyline[0] || pt;
+    return {
+      projected: fallback,
+      distanceMeters: 0,
+      polylineVertexIndex: 0,
+      distanceAlongLineMeters: 0,
+    };
+  }
+
+  const proj = projectPointOntoPolyline(pt, polyline);
+  const cum = computeCumulativeDistances(polyline);
+  const segLen =
+    (cum[proj.segmentIndex + 1] ?? cum[proj.segmentIndex]) - cum[proj.segmentIndex];
+  const distanceAlongLineMeters = Math.round(
+    cum[proj.segmentIndex] + proj.t * segLen
+  );
+  const polylineVertexIndex =
+    proj.t >= 0.5
+      ? Math.min(polyline.length - 1, proj.segmentIndex + 1)
+      : proj.segmentIndex;
+
+  return {
+    projected: [
+      Number(proj.projected[0].toFixed(6)),
+      Number(proj.projected[1].toFixed(6)),
+    ],
+    distanceMeters: proj.distanceMeters,
+    polylineVertexIndex,
+    distanceAlongLineMeters,
+  };
+}
+
+/**
+ * Interpolate an exact GPS coordinate at `targetDistanceMeters` directly along `polyline`
+ * (guarantees 0m perpendicular offset from the line track / street geometry).
+ */
+export function interpolateAlongPolyline(
+  polyline: LatLng[],
+  targetDistanceMeters: number
+): LatLng {
+  if (polyline.length === 0) return [47.3235, 5.0335];
+  if (polyline.length === 1 || targetDistanceMeters <= 0) return polyline[0];
+
+  let traversed = 0;
+  for (let i = 0; i < polyline.length - 1; i++) {
+    const a = polyline[i];
+    const b = polyline[i + 1];
+    const segLen = calculateDistanceMeters(a[0], a[1], b[0], b[1]);
+
+    if (traversed + segLen >= targetDistanceMeters) {
+      const ratio = segLen > 0 ? (targetDistanceMeters - traversed) / segLen : 0;
+      return [
+        Number((a[0] + (b[0] - a[0]) * ratio).toFixed(6)),
+        Number((a[1] + (b[1] - a[1]) * ratio).toFixed(6)),
+      ];
+    }
+    traversed += segLen;
+  }
+
+  return polyline[polyline.length - 1];
+}
+
+/**
+ * Slice a sub-polyline following every vertex between two cumulative distances (forward or reverse)
+ */
+export function slicePolylineByDistances(
+  polyline: LatLng[],
+  fromMeters: number,
+  toMeters: number
+): LatLng[] {
+  if (polyline.length < 2) return polyline;
+  const cum = computeCumulativeDistances(polyline);
+  const totalLen = cum[cum.length - 1];
+  const startD = Math.max(0, Math.min(totalLen, fromMeters));
+  const endD = Math.max(0, Math.min(totalLen, toMeters));
+
+  const startPt = interpolateAlongPolyline(polyline, startD);
+  const endPt = interpolateAlongPolyline(polyline, endD);
+  const result: LatLng[] = [startPt];
+
+  if (startD <= endD) {
+    for (let i = 0; i < polyline.length; i++) {
+      if (cum[i] > startD && cum[i] < endD) {
+        result.push(polyline[i]);
+      }
+    }
+  } else {
+    for (let i = polyline.length - 1; i >= 0; i--) {
+      if (cum[i] < startD && cum[i] > endD) {
+        result.push(polyline[i]);
+      }
+    }
+  }
+
+  result.push(endPt);
+  return result;
+}
+
+/**
  * Snap a TransitStop millimeter-accurately onto its line's rail/street polyline
+ * and record its vertex index and cumulative distance along the line.
  */
 export function snapStopToPolyline(
   stop: TransitStop,
   polyline: LatLng[],
-  maxSnapDistanceMeters: number = 350
+  maxSnapDistanceMeters: number = 1500
 ): TransitStop {
   if (polyline.length < 2) return stop;
 
-  const proj = projectPointOntoPolyline([stop.latitude, stop.longitude], polyline);
-  if (proj.distanceMeters > maxSnapDistanceMeters) {
-    return stop;
+  const snapped = snapPointToPolyline([stop.latitude, stop.longitude], polyline);
+  if (snapped.distanceMeters > maxSnapDistanceMeters) {
+    return {
+      ...stop,
+      polylineVertexIndex: snapped.polylineVertexIndex,
+      distanceAlongLineMeters: snapped.distanceAlongLineMeters,
+    };
   }
 
   return {
     ...stop,
-    latitude: Number(proj.projected[0].toFixed(6)),
-    longitude: Number(proj.projected[1].toFixed(6)),
+    latitude: snapped.projected[0],
+    longitude: snapped.projected[1],
+    polylineVertexIndex: snapped.polylineVertexIndex,
+    distanceAlongLineMeters: snapped.distanceAlongLineMeters,
   };
 }
 

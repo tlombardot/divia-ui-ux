@@ -6,6 +6,8 @@ export interface TransitStop {
   latitude: number;
   longitude: number;
   lines: string[];
+  polylineVertexIndex?: number;
+  distanceAlongLineMeters?: number;
 }
 
 export type LineCategory = 'TRAM' | 'LIANE' | 'BUS';
