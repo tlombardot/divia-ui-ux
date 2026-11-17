@@ -8,14 +8,21 @@ export interface TransitStop {
   lines: string[];
 }
 
+export type LineCategory = 'TRAM' | 'LIANE' | 'BUS';
+export type ShapeSource = 'overpass' | 'osrm' | 'fallback';
+
 export interface TransitLine {
   id: string;
   name: string;
   type: 'tram' | 'bus';
+  category: LineCategory;
+  terminusA: string;
+  terminusB: string;
   color: string;
   textColor: string;
   stops: TransitStop[];
   polyline: [number, number][]; // [latitude, longitude]
+  shapeSource?: ShapeSource;
 }
 
 export type ReportType = 'CONTROLLER' | 'CROWD';
@@ -176,3 +183,13 @@ export const voteReportSchema = z.object({
 });
 
 export type VoteReportInput = z.infer<typeof voteReportSchema>;
+
+export const networkShapesQuerySchema = z.object({
+  category: z.enum(['TRAM', 'LIANE', 'BUS']).optional(),
+  refresh: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform(v => v === 'true'),
+});
+
+export type NetworkShapesQuery = z.infer<typeof networkShapesQuerySchema>;

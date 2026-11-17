@@ -6,6 +6,7 @@ import helmet from 'helmet';
 import http from 'http';
 import { Server, Socket } from 'socket.io';
 import { ALL_DIJON_STOPS, DIJON_LINES, getLineById, getStopById } from './data/dijonNetwork';
+import { networkGeometryService } from './services/networkGeometryService';
 import { reportService } from './services/reportService';
 import {
   calculateRoutes,
@@ -14,6 +15,7 @@ import {
 } from './services/routingService';
 import {
   createReportSchema,
+  networkShapesQuerySchema,
   routeQuerySchema,
   StationDeparture,
   voteReportSchema,
@@ -91,6 +93,30 @@ app.get('/api/network/lines', (_req: Request, res: Response) => {
 
 app.get('/api/network/stops', (_req: Request, res: Response) => {
   res.status(200).json({ stops: ALL_DIJON_STOPS });
+});
+
+// High-precision geographic network shapes (Overpass + OSRM cached)
+app.get('/api/network/shapes', async (req: Request, res: Response) => {
+  const parseResult = networkShapesQuerySchema.safeParse(req.query);
+
+  if (!parseResult.success) {
+    res.status(400).json({
+      error: 'Paramètres de géométrie réseau invalides',
+      details: parseResult.error.format(),
+    });
+    return;
+  }
+
+  try {
+    const result = await networkGeometryService.getNetworkShapes({
+      category: parseResult.data.category,
+      forceRefresh: parseResult.data.refresh,
+    });
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('[NetworkShapes Error]:', error);
+    res.status(500).json({ error: 'Erreur lors de la génération des tracés réseau' });
+  }
 });
 
 // Real-time station departures + crowd + controller alerts
@@ -346,6 +372,7 @@ reportService.startCleanupWorker();
 
 // Start server if executed directly
 if (process.env.NODE_ENV !== 'test') {
+  networkGeometryService.warmupCache();
   server.listen(PORT, () => {
     console.log(`[DiviAkhaaa Server] listening on port ${PORT}`);
     console.log(`[DiviAkhaaa Server] Health check available at http://localhost:${PORT}/health`);
