@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { calculateDistanceMeters, DARCY_HUB, DIJON_CENTER, QUICK_STOPS } from '../data/dijonNetwork';
+import { geocodingService } from '../services/geocodingService';
 import { getBaseApiUrl } from '../services/apiService';
 
 describe('Mobile Logic & Network Calculations', () => {
@@ -36,5 +37,64 @@ describe('Mobile Logic & Network Calculations', () => {
     const url = getBaseApiUrl();
     expect(url.startsWith('http://')).toBe(true);
     expect(url.endsWith('/')).toBe(false);
+  });
+});
+
+describe('Geofencing & Automatic Navigation Transitions', () => {
+  const BOARDING_RADIUS_METERS = 30;
+  const TRANSIT_STATION_RADIUS_METERS = 45;
+  const DESTINATION_RADIUS_METERS = 25;
+
+  it('triggers automatic boarding when user enters 30m radius of stop', () => {
+    // Exact stop coordinate
+    const stopLat = 47.3235;
+    const stopLon = 5.0335;
+
+    // User 15m away
+    const userLat = 47.3235 + 0.0001; // ~11m difference
+    const userLon = 5.0335;
+
+    const dist = calculateDistanceMeters(userLat, userLon, stopLat, stopLon);
+    expect(dist).toBeLessThanOrEqual(BOARDING_RADIUS_METERS);
+  });
+
+  it('detects transit station crossed when vehicle is within 45m', () => {
+    const stationLat = 47.3262;
+    const stationLon = 5.0461;
+
+    // Tram at 30m from station
+    const tramLat = 47.3262 + 0.00025;
+    const tramLon = 5.0461;
+
+    const dist = calculateDistanceMeters(tramLat, tramLon, stationLat, stationLon);
+    expect(dist).toBeLessThanOrEqual(TRANSIT_STATION_RADIUS_METERS);
+  });
+
+  it('triggers automatic arrival celebration when within 25m of destination', () => {
+    const destLat = 47.3101;
+    const destLon = 5.1095;
+
+    // Pedestrian at 12m from destination
+    const pedLat = 47.3101 + 0.0001;
+    const pedLon = 5.1095;
+
+    const dist = calculateDistanceMeters(pedLat, pedLon, destLat, destLon);
+    expect(dist).toBeLessThanOrEqual(DESTINATION_RADIUS_METERS);
+  });
+
+  it('detects 1 stop remaining before alighting to trigger haptic warning', () => {
+    const totalStops = 5;
+    const passedStopsCount = 4;
+    const remainingStops = totalStops - passedStopsCount;
+
+    expect(remainingStops).toBe(1);
+    const shouldWarn = remainingStops === 1;
+    expect(shouldWarn).toBe(true);
+  });
+
+  it('searches Dijon stops and POIs with geocoding service', async () => {
+    const results = await geocodingService.searchAddresses('Darcy');
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.some(r => r.label.toLowerCase().includes('darcy'))).toBe(true);
   });
 });

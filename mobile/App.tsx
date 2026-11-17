@@ -1,6 +1,7 @@
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import * as Haptics from 'expo-haptics';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MapView from 'react-native-maps';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Header } from './src/components/common/Header';
@@ -47,8 +48,33 @@ export default function App() {
   const [activeReportCard, setActiveReportCard] = useState<Report | null>(null);
   const [isReportModalVisible, setIsReportModalVisible] = useState<boolean>(false);
   const [isLoadingRoutes, setIsLoadingRoutes] = useState<boolean>(false);
+  const [dismissedAlertId, setDismissedAlertId] = useState<string | null>(null);
 
   const isNavigating = navState !== 'IDLE';
+
+  // Alerte contrôleur en cours de navigation active
+  const liveControllerAlert = useMemo(() => {
+    if (!isNavigating || !activeRoute) return null;
+    const linesUsed = activeRoute.segments
+      .filter(s => s.type === 'TRANSIT' && s.lineId)
+      .map(s => s.lineId as string);
+
+    const alert = reports.find(
+      r => r.status === 'active' && linesUsed.includes(r.lineId) && r.id !== dismissedAlertId
+    );
+    return alert || null;
+  }, [isNavigating, activeRoute, reports, dismissedAlertId]);
+
+  // Déclenchement de la vibration haptique en cas d'alerte contrôleur
+  useEffect(() => {
+    if (liveControllerAlert) {
+      try {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      } catch {
+        // Ignore
+      }
+    }
+  }, [liveControllerAlert]);
 
   // Search routes to a target coordinate
   const fetchRouteAlternatives = useCallback(
@@ -163,6 +189,26 @@ export default function App() {
         {/* Top Header */}
         <Header isDemoMode={isDemoMode} onRefreshLocation={refreshLocation} />
 
+        {/* Live Controller Alert Banner during active navigation */}
+        {liveControllerAlert && (
+          <View style={styles.topLiveAlert}>
+            <Text style={styles.topLiveAlertIcon}>🚨</Text>
+            <View style={styles.topLiveAlertContent}>
+              <Text style={styles.topLiveAlertTitle}>Contrôle signalé sur votre ligne !</Text>
+              <Text style={styles.topLiveAlertText}>
+                {liveControllerAlert.stopName} ({liveControllerAlert.lineId}) · {liveControllerAlert.direction}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => setDismissedAlertId(liveControllerAlert.id)}
+              style={styles.dismissBtn}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.dismissBtnText}>Vu</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Search & Navigation Bar (when not in active trip) */}
         {!isNavigating && (
           <RouteSearchBar
@@ -229,5 +275,53 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#FAFAFA',
+  },
+  topLiveAlert: {
+    position: 'absolute',
+    top: 76,
+    left: 16,
+    right: 16,
+    backgroundColor: '#B71C1C',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 8,
+    zIndex: 45,
+  },
+  topLiveAlertIcon: {
+    fontSize: 22,
+    marginRight: 10,
+  },
+  topLiveAlertContent: {
+    flex: 1,
+  },
+  topLiveAlertTitle: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  topLiveAlertText: {
+    color: '#FFCDD2',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  dismissBtn: {
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    marginLeft: 8,
+  },
+  dismissBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
   },
 });
