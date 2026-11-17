@@ -5,7 +5,13 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import http from 'http';
 import { Server, Socket } from 'socket.io';
-import { ALL_DIJON_STOPS, DIJON_LINES, getLineById, getStopById } from './data/dijonNetwork';
+import {
+  ALL_DIJON_STOPS,
+  buildCompleteStationsCatalog,
+  DIJON_LINES,
+  getLineById,
+  getStopById,
+} from './data/dijonNetwork';
 import { autocompletePlaces, getPlaceDetails } from './services/googlePlacesService';
 import { computeGoogleTransitRoutes } from './services/googleTransitService';
 import { networkGeometryService } from './services/networkGeometryService';
@@ -22,6 +28,7 @@ import {
   placesAutocompleteQuerySchema,
   routeQuerySchema,
   StationDeparture,
+  stationsQuerySchema,
   voteReportSchema,
 } from './types';
 
@@ -106,6 +113,51 @@ app.get('/api/network/lines', (_req: Request, res: Response) => {
 
 app.get('/api/network/stops', (_req: Request, res: Response) => {
   res.status(200).json({ stops: ALL_DIJON_STOPS });
+});
+
+// Complete catalog of all unique Dijon stations (T1..B13) with lines & directions
+app.get('/api/stations', (req: Request, res: Response) => {
+  const parseResult = stationsQuerySchema.safeParse(req.query);
+  if (!parseResult.success) {
+    res.status(400).json({
+      error: 'Paramètres de recherche de stations invalides',
+      details: parseResult.error.format(),
+    });
+    return;
+  }
+
+  const cachedLines = networkGeometryService.getCachedLinesSync();
+  let stations = buildCompleteStationsCatalog(cachedLines);
+
+  const { q, lineId, category } = parseResult.data;
+  if (lineId) {
+    const upperLine = lineId.toUpperCase();
+    stations = stations.filter(s => s.lines.includes(upperLine));
+  }
+  if (category) {
+    stations = stations.filter(s =>
+      s.lineDirections.some(ld => ld.category === category)
+    );
+  }
+  if (q) {
+    const normalizedQ = q
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+    stations = stations.filter(s => {
+      const normName = s.name
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+      return normName.includes(normalizedQ) || s.lines.some(l => l.toLowerCase().includes(normalizedQ));
+    });
+  }
+
+  res.status(200).json({
+    stations,
+    totalCount: stations.length,
+    linesCount: cachedLines.length,
+  });
 });
 
 // High-precision geographic network shapes (Overpass + OSRM cached)

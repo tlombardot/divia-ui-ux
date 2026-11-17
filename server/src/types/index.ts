@@ -23,12 +23,27 @@ export interface TransitLine {
   category: LineCategory;
   terminusA: string;
   terminusB: string;
+  directionA?: string;
+  directionB?: string;
   color: string;
   textColor: string;
   stops: TransitStop[];
   polyline: [number, number][]; // Forward (Aller: terminusA -> terminusB)
   returnPolyline?: [number, number][]; // Return (Retour: terminusB -> terminusA)
   shapeSource?: ShapeSource;
+}
+
+export interface StationLineDirection {
+  lineId: string;
+  lineName: string;
+  lineColor: string;
+  category: LineCategory;
+  directionA: string;
+  directionB: string;
+}
+
+export interface StationCatalogItem extends TransitStop {
+  lineDirections: StationLineDirection[];
 }
 
 export type ReportType = 'CONTROLLER' | 'CROWD';
@@ -228,3 +243,11 @@ export const placesAutocompleteQuerySchema = z.object({
 export const placeDetailsQuerySchema = z.object({
   placeId: z.string().trim().min(1, 'placeId requis').max(256),
 });
+
+export const stationsQuerySchema = z.object({
+  q: z.string().trim().max(120).optional(),
+  lineId: z.string().trim().max(16).optional(),
+  category: z.enum(['TRAM', 'LIANE', 'BUS']).optional(),
+});
+
+export type StationsQuery = z.infer<typeof stationsQuerySchema>;

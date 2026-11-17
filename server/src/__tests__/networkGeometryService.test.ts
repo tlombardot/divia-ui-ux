@@ -2,12 +2,17 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { calculateDistanceMeters, DIJON_LINES } from '../data/dijonNetwork';
+import {
+  buildCompleteStationsCatalog,
+  calculateDistanceMeters,
+  DIJON_LINES,
+} from '../data/dijonNetwork';
+import { getNextWednesdayTenAmParisIso } from '../services/googleTransitService';
 import {
   NETWORK_CACHE_VERSION,
   NetworkGeometryService,
 } from '../services/networkGeometryService';
-import { networkShapesQuerySchema } from '../types';
+import { networkShapesQuerySchema, stationsQuerySchema } from '../types';
 import {
   LatLng,
   projectPointOntoPolyline,
@@ -173,9 +178,56 @@ describe('NetworkGeometryService — Official Palette, Continuity & Disk Cache',
     expect(third.lines.map(l => l.id)).toEqual(['T1', 'T2']);
   });
 
-  it('validates /api/network/shapes query params strictly with Zod', () => {
+  it('validates /api/network/shapes and /api/stations query params strictly with Zod', () => {
     expect(networkShapesQuerySchema.safeParse({}).success).toBe(true);
     expect(networkShapesQuerySchema.safeParse({ category: 'TRAM' }).success).toBe(true);
     expect(networkShapesQuerySchema.safeParse({ category: 'SUBWAY' }).success).toBe(false);
+
+    expect(stationsQuerySchema.safeParse({ q: 'Darcy', lineId: 'B12' }).success).toBe(true);
+    expect(stationsQuerySchema.safeParse({ category: 'BUS' }).success).toBe(true);
+    expect(stationsQuerySchema.safeParse({ category: 'METRO' }).success).toBe(false);
+  });
+
+  it('exposes complete B10/B12/B13 stops, directions, Wednesday 10:00 Paris ISO, and invalidates incomplete caches', async () => {
+    for (const busId of ['B10', 'B12', 'B13']) {
+      const line = DIJON_LINES.find(l => l.id === busId);
+      expect(line).toBeDefined();
+      expect(line!.stops.length).toBeGreaterThanOrEqual(8);
+      expect(line!.directionA).toBeTruthy();
+      expect(line!.directionB).toBeTruthy();
+    }
+
+    const catalog = buildCompleteStationsCatalog(DIJON_LINES);
+    expect(catalog.length).toBeGreaterThanOrEqual(45);
+    expect(catalog.some(s => s.id === 'b10-ahuy' && s.lines.includes('B10'))).toBe(true);
+    expect(catalog.some(s => s.id === 'b12-chicago' && s.lines.includes('B12'))).toBe(true);
+    expect(catalog.some(s => s.id === 'b13-mottegiron' && s.lines.includes('B13'))).toBe(true);
+
+    const wedIso = getNextWednesdayTenAmParisIso(new Date('2026-11-17T22:00:00.000Z'));
+    const wedDate = new Date(wedIso);
+    expect(wedDate.getUTCDay()).toBe(3); // Wednesday
+    expect(wedDate.getUTCHours()).toBe(9); // 10:00 CET (winter)
+
+    // Write incomplete cache missing B10/B12/B13 and verify automatic regeneration
+    fs.writeFileSync(
+      tempCachePath,
+      JSON.stringify({
+        version: NETWORK_CACHE_VERSION,
+        generatedAt: Date.now(),
+        lines: DIJON_LINES.filter(l => l.category !== 'BUS'),
+        stops: [],
+      }),
+      'utf-8'
+    );
+
+    const svc = new NetworkGeometryService({
+      cacheFilePath: tempCachePath,
+      allowExternalFetch: false,
+    });
+    const regenerated = await svc.getNetworkShapes();
+    expect(regenerated.fromCache).toBe(false);
+    expect(regenerated.lines.map(l => l.id)).toEqual(
+      expect.arrayContaining(['B10', 'B12', 'B13'])
+    );
   });
 });

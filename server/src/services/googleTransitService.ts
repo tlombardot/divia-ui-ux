@@ -714,22 +714,26 @@ export async function computeGoogleTransitRoutes(
 }
 
 /**
- * Compute a next-weekday 10:00 UTC ISO timestamp so daytime transit shapes
- * can be queried reliably even when the server boots late at night.
+ * Compute next Wednesday at 10:00 Europe/Paris (09:00 UTC winter / 08:00 UTC summer)
+ * so daytime bus lines (B10, B12, B13) & trams always return active Google Transit shapes
+ * even when the server boots late at night or on weekends.
  */
-function getNextWeekdayDaytimeIso(): string {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() + 1);
-  while (d.getUTCDay() === 0 || d.getUTCDay() === 6) {
-    d.setUTCDate(d.getUTCDate() + 1);
-  }
-  d.setUTCHours(9, 30, 0, 0); // 10:30 / 11:30 Paris time
+export function getNextWednesdayTenAmParisIso(baseDate: Date = new Date()): string {
+  const d = new Date(baseDate.getTime());
+  // Advance to next Wednesday (day 3) strictly in the future
+  const daysUntilWednesday = ((3 - d.getUTCDay() + 7) % 7) || 7;
+  d.setUTCDate(d.getUTCDate() + daysUntilWednesday);
+
+  // Determine Paris UTC offset (CET = +1 in Nov..Mar, CEST = +2 in Apr..Oct)
+  const month = d.getUTCMonth(); // 0-indexed
+  const parisOffsetHours = month >= 3 && month <= 9 ? 2 : 1;
+  d.setUTCHours(10 - parisOffsetHours, 0, 0, 0);
   return d.toISOString();
 }
 
 /**
- * Extract the exact official TRANSIT polyline for a single Divia line (e.g. T1, T2, L5)
- * by issuing one Google Routes API TRANSIT request between its termini.
+ * Extract the exact official TRANSIT polyline for a single Divia line (e.g. T1, T2, L5, B10, B12, B13)
+ * by issuing one Google Routes API TRANSIT request between its termini at Wednesday 10:00 Paris time.
  */
 export async function fetchGoogleTransitLinePolyline(
   lineId: string,
@@ -748,7 +752,7 @@ export async function fetchGoogleTransitLinePolyline(
     destination: { location: { latLng: destination } },
     travelMode: 'TRANSIT',
     computeAlternativeRoutes: true,
-    departureTime: getNextWeekdayDaytimeIso(),
+    departureTime: getNextWednesdayTenAmParisIso(),
     transitPreferences: {
       allowedTravelModes,
       routingPreference: 'FEWER_TRANSFERS',

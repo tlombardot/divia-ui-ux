@@ -1,4 +1,4 @@
-import { TransitLine, TransitStop } from '../types';
+import { StationCatalogItem, TransitLine, TransitStop } from '../types';
 
 export const DIJON_CENTER = {
   latitude: 47.3220,
@@ -197,8 +197,11 @@ const stopsL6: TransitStop[] = [
 const stopsB10: TransitStop[] = [
   { id: 'b10-ahuy', name: 'Ahuy', latitude: 47.3680, longitude: 5.0280, lines: ['B10'] },
   { id: 'b10-hauteville', name: 'Hauteville', latitude: 47.3550, longitude: 5.0180, lines: ['B10'] },
+  { id: 'b10-daix', name: 'Daix Mairie', latitude: 47.3492, longitude: 5.0045, lines: ['B10'] },
+  { id: 'b10-sainte-anne', name: 'Sainte-Anne', latitude: 47.3358, longitude: 5.0235, lines: ['B10'] },
   { id: 'b10-victorhugo', name: 'Victor Hugo', latitude: 47.3270, longitude: 5.0290, lines: ['B10'] },
   HUB_DARCY,
+  { id: 'l5-spuller', name: 'Spuller', latitude: 47.3282, longitude: 5.0242, lines: ['L5', 'B10'] },
   { id: 'l5-talant', name: 'Talant Dullin', latitude: 47.3371, longitude: 5.0028, lines: ['L5', 'B10'] },
   { id: 'b10-talant-citadelle', name: 'Talant Citadelle', latitude: 47.3385, longitude: 4.9965, lines: ['B10'] },
 ];
@@ -209,9 +212,12 @@ const stopsB10: TransitStop[] = [
 const stopsB12: TransitStop[] = [
   { id: 'b12-plombieres', name: 'Plombières', latitude: 47.3350, longitude: 4.9720, lines: ['B12'] },
   { id: 'b12-velars', name: 'Canal de Bourgogne', latitude: 47.3290, longitude: 4.9980, lines: ['B12'] },
+  { id: 'b12-kir', name: 'Lac Kir', latitude: 47.3264, longitude: 5.0112, lines: ['B12'] },
   HUB_GARE,
   HUB_DARCY,
   HUB_MONGE,
+  { id: 'b12-premier-mai', name: '1er Mai', latitude: 47.3145, longitude: 5.0320, lines: ['B12'] },
+  { id: 'b12-port-canal', name: 'Port du Canal', latitude: 47.3126, longitude: 5.0398, lines: ['B12'] },
   { id: 'b12-chicago', name: 'Chicago', latitude: 47.3120, longitude: 5.0540, lines: ['B12'] },
 ];
 
@@ -220,10 +226,12 @@ const stopsB12: TransitStop[] = [
 // =============================================================================
 const stopsB13: TransitStop[] = [
   { id: 'b13-fontaine', name: 'Fontaine Village', latitude: 47.3440, longitude: 5.0190, lines: ['B13'] },
+  { id: 'b13-saint-martin', name: 'Saint-Martin', latitude: 47.3375, longitude: 5.0228, lines: ['B13'] },
   { id: 'b13-montchapet', name: 'Montchapet', latitude: 47.3310, longitude: 5.0260, lines: ['B13'] },
   HUB_GARE,
   HUB_DARCY,
   HUB_MONGE,
+  { id: 'b13-larrey', name: 'Larrey', latitude: 47.3118, longitude: 5.0235, lines: ['B13'] },
   { id: 'b13-mottegiron', name: 'Motte Giron', latitude: 47.3060, longitude: 5.0150, lines: ['B13'] },
 ];
 
@@ -297,6 +305,8 @@ export const DIJON_LINES: TransitLine[] = [
     category: 'TRAM',
     terminusA: 'Dijon Gare',
     terminusB: 'Quetigny Centre',
+    directionA: 'Dijon Gare',
+    directionB: 'Quetigny Centre',
     color: '#E11535',
     textColor: '#FFFFFF',
     stops: stopsT1,
@@ -310,6 +320,8 @@ export const DIJON_LINES: TransitLine[] = [
     category: 'TRAM',
     terminusA: 'Valmy',
     terminusB: 'Chenôve Centre',
+    directionA: 'Valmy',
+    directionB: 'Chenôve Centre',
     color: '#4B2982',
     textColor: '#FFFFFF',
     stops: stopsT2,
@@ -323,6 +335,8 @@ export const DIJON_LINES: TransitLine[] = [
     category: 'LIANE',
     terminusA: 'Epirey Capnord',
     terminusB: 'Fontaine d\'Ouche',
+    directionA: 'Epirey Capnord',
+    directionB: 'Fontaine d\'Ouche',
     color: '#F39200',
     textColor: '#FFFFFF',
     stops: stopsL3,
@@ -336,6 +350,8 @@ export const DIJON_LINES: TransitLine[] = [
     category: 'LIANE',
     terminusA: 'Nation',
     terminusB: 'Marsannay Portes du Sud',
+    directionA: 'Nation',
+    directionB: 'Marsannay Portes du Sud',
     color: '#009FE3',
     textColor: '#FFFFFF',
     stops: stopsL4,
@@ -349,6 +365,8 @@ export const DIJON_LINES: TransitLine[] = [
     category: 'LIANE',
     terminusA: 'Talant Dullin',
     terminusB: 'Université',
+    directionA: 'Talant Dullin',
+    directionB: 'Université',
     color: '#00875A',
     textColor: '#FFFFFF',
     stops: stopsL5,
@@ -362,6 +380,8 @@ export const DIJON_LINES: TransitLine[] = [
     category: 'LIANE',
     terminusA: 'Toison d\'Or',
     terminusB: 'Longvic',
+    directionA: 'Toison d\'Or',
+    directionB: 'Longvic',
     color: '#D81B60',
     textColor: '#FFFFFF',
     stops: stopsL6,
@@ -375,6 +395,8 @@ export const DIJON_LINES: TransitLine[] = [
     category: 'BUS',
     terminusA: 'Ahuy',
     terminusB: 'Talant Citadelle',
+    directionA: 'Ahuy',
+    directionB: 'Talant Citadelle',
     color: '#00695C',
     textColor: '#FFFFFF',
     stops: stopsB10,
@@ -388,6 +410,8 @@ export const DIJON_LINES: TransitLine[] = [
     category: 'BUS',
     terminusA: 'Plombières',
     terminusB: 'Chicago',
+    directionA: 'Plombières',
+    directionB: 'Chicago',
     color: '#6D4C41',
     textColor: '#FFFFFF',
     stops: stopsB12,
@@ -401,6 +425,8 @@ export const DIJON_LINES: TransitLine[] = [
     category: 'BUS',
     terminusA: 'Fontaine Village',
     terminusB: 'Motte Giron',
+    directionA: 'Fontaine Village',
+    directionB: 'Motte Giron',
     color: '#3949AB',
     textColor: '#FFFFFF',
     stops: stopsB13,
@@ -409,11 +435,62 @@ export const DIJON_LINES: TransitLine[] = [
   },
 ];
 
-// Tous les arrêts uniques dédupliqués
-export const ALL_DIJON_STOPS: TransitStop[] = Array.from(
-  new Map(
-    DIJON_LINES.flatMap(l => l.stops).map(stop => [stop.id, stop])
-  ).values()
+/**
+ * Construit le catalogue complet et dédupliqué de toutes les stations Divia (T1..B13)
+ * en fusionnant toutes les lignes et leurs deux terminus/directions pour chaque arrêt.
+ */
+export function buildCompleteStationsCatalog(
+  lines: TransitLine[] = DIJON_LINES
+): StationCatalogItem[] {
+  const stationMap = new Map<string, StationCatalogItem>();
+
+  for (const line of lines) {
+    const dirA = line.directionA || line.terminusA;
+    const dirB = line.directionB || line.terminusB;
+
+    for (const stop of line.stops) {
+      const existing = stationMap.get(stop.id);
+      const lineDirection = {
+        lineId: line.id,
+        lineName: line.name,
+        lineColor: line.color,
+        category: line.category,
+        directionA: dirA,
+        directionB: dirB,
+      };
+
+      if (!existing) {
+        stationMap.set(stop.id, {
+          id: stop.id,
+          name: stop.name,
+          latitude: stop.latitude,
+          longitude: stop.longitude,
+          lines: Array.from(new Set([...stop.lines, line.id])),
+          lineDirections: [lineDirection],
+        });
+      } else {
+        if (!existing.lines.includes(line.id)) {
+          existing.lines.push(line.id);
+        }
+        if (!existing.lineDirections.some(d => d.lineId === line.id)) {
+          existing.lineDirections.push(lineDirection);
+        }
+      }
+    }
+  }
+
+  return Array.from(stationMap.values()).sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+}
+
+// Tous les arrêts uniques dédupliqués avec fusion complète des lignes
+export const ALL_DIJON_STOPS: TransitStop[] = buildCompleteStationsCatalog(DIJON_LINES).map(
+  ({ id, name, latitude, longitude, lines }) => ({
+    id,
+    name,
+    latitude,
+    longitude,
+    lines,
+  })
 );
 
 /**

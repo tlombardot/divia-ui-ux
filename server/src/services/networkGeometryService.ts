@@ -63,7 +63,8 @@ interface OSRMRouteResponse {
   }>;
 }
 
-export const NETWORK_CACHE_VERSION = 3;
+export const NETWORK_CACHE_VERSION = 4;
+const REQUIRED_LINE_IDS = ['T1', 'T2', 'L3', 'L4', 'L5', 'L6', 'B10', 'B12', 'B13'];
 const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
@@ -126,7 +127,14 @@ export class NetworkGeometryService {
         Array.isArray(parsed.lines) &&
         parsed.lines.length === DIJON_LINES.length
       ) {
-        return parsed;
+        const lineIds = new Set(parsed.lines.map(l => l.id));
+        const hasAllRequiredLines = REQUIRED_LINE_IDS.every(id => {
+          const found = parsed.lines.find(l => l.id === id);
+          return lineIds.has(id) && Boolean(found && found.polyline.length >= 2);
+        });
+        if (hasAllRequiredLines) {
+          return parsed;
+        }
       }
       return null;
     } catch {
