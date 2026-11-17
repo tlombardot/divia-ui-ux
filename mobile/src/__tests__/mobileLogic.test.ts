@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { calculateDistanceMeters, DARCY_HUB, DIJON_CENTER, QUICK_STOPS } from '../data/dijonNetwork';
+import {
+  calculateDistanceMeters,
+  DARCY_HUB,
+  DIJON_CENTER,
+  getLineColor,
+  getLiveDeparturesForLine,
+  QUICK_STOPS,
+} from '../data/dijonNetwork';
 import { geocodingService } from '../services/geocodingService';
 import { getBaseApiUrl } from '../services/apiService';
 
@@ -15,10 +22,43 @@ describe('Mobile Logic & Network Calculations', () => {
     expect(dist).toBeLessThan(1000);
   });
 
-  it('triggers demo mode when distance exceeds 15 km limit', () => {
-    // Paris coordinates: ~48.8566, 2.3522 (far from Dijon > 250km)
-    const dist = calculateDistanceMeters(48.8566, 2.3522, DIJON_CENTER.latitude, DIJON_CENTER.longitude);
-    expect(dist).toBeGreaterThan(15000);
+  it('covers the entire Grand Dijon agglomeration within 25 km radius', () => {
+    const DIJON_MAX_RADIUS = 25000;
+    // Chenôve, Quetigny, Marsannay, Longvic
+    const suburbs = [
+      { name: 'Chenôve', lat: 47.2928, lon: 5.0125 },
+      { name: 'Quetigny', lat: 47.3101, lon: 5.1095 },
+      { name: 'Marsannay', lat: 47.2790, lon: 5.0040 },
+      { name: 'Longvic', lat: 47.2880, lon: 5.0640 },
+    ];
+    for (const suburb of suburbs) {
+      const dist = calculateDistanceMeters(
+        suburb.lat,
+        suburb.lon,
+        DIJON_CENTER.latitude,
+        DIJON_CENTER.longitude
+      );
+      expect(dist).toBeLessThan(DIJON_MAX_RADIUS);
+    }
+
+    // Paris coordinates (> 250 km) should trigger demo fallback
+    const distParis = calculateDistanceMeters(
+      48.8566,
+      2.3522,
+      DIJON_CENTER.latitude,
+      DIJON_CENTER.longitude
+    );
+    expect(distParis).toBeGreaterThan(DIJON_MAX_RADIUS);
+  });
+
+  it('computes official Divia colors and live next departures', () => {
+    expect(getLineColor('T1')).toBe('#E11535');
+    expect(getLineColor('T2')).toBe('#4B2982');
+    expect(getLineColor('L5')).toBe('#00875A');
+
+    const [first, second] = getLiveDeparturesForLine('T1');
+    expect(first).toBeGreaterThan(0);
+    expect(second).toBeGreaterThan(first);
   });
 
   it('provides all quick stops chips required by Google Maps Transports UX', () => {

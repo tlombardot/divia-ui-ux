@@ -304,9 +304,9 @@ export default function App() {
     }
   }, [liveControllerAlert]);
 
-  // Compute floating action buttons bottom offset cleanly above the bottom sheet
+  // Compute floating action buttons bottom offset cleanly above the bottom sheet or nav card
   const floatingBottomOffset = isNavigating
-    ? 250
+    ? 148
     : getSnapHeight(sheetSnap) + 14;
 
   return (

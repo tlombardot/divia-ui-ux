@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getLineColor } from '../../data/dijonNetwork';
 import { NavState } from '../../hooks/useLiveNavigation';
 import { COLORS } from '../../theme/colors';
 import { Report, RouteOption } from '../../types';
@@ -20,6 +22,14 @@ interface ActiveTripBottomSheetProps {
   onEndTrip: () => void;
 }
 
+function getManeuverArrow(instruction: string): string {
+  const lower = instruction.toLowerCase();
+  if (lower.includes('gauche')) return '↰';
+  if (lower.includes('droite')) return '↱';
+  if (lower.includes('demi-tour')) return '↶';
+  return '↑';
+}
+
 export const ActiveTripBottomSheet: React.FC<ActiveTripBottomSheetProps> = ({
   route,
   navState,
@@ -27,6 +37,8 @@ export const ActiveTripBottomSheet: React.FC<ActiveTripBottomSheetProps> = ({
   distanceToNextStep,
   passedStopsCount,
   alightingWarning,
+  liveControllerAlert,
+  onDismissControllerAlert,
   isSimulating,
   simulationProgress,
   onStartSimulation,
@@ -34,399 +46,522 @@ export const ActiveTripBottomSheet: React.FC<ActiveTripBottomSheetProps> = ({
   onEndTrip,
 }) => {
   const insets = useSafeAreaInsets();
+  const [showSimMenu, setShowSimMenu] = useState(false);
+
   const currentSegment = route.segments[currentSegmentIndex] || route.segments[0];
-  const passedStops = currentSegment.passedStops || [];
-  const totalStops = passedStops.length;
+  const passedStops = currentSegment?.passedStops || [];
+  const totalStops = Math.max(1, passedStops.length - 1);
   const remainingStops = Math.max(0, totalStops - passedStopsCount);
+  const remainingTransitMin = Math.max(1, remainingStops * 2);
+
+  // Remaining total minutes estimate
+  const remainingSegmentsMin = route.segments
+    .slice(currentSegmentIndex + 1)
+    .reduce((acc, s) => acc + s.durationMinutes, 0);
+  const currentRemMin =
+    navState === 'ARRIVED'
+      ? 0
+      : navState === 'ON_TRANSIT'
+        ? remainingTransitMin
+        : Math.max(1, Math.round(distanceToNextStep / 75) || currentSegment.durationMinutes);
+  const totalRemainingMin = navState === 'ARRIVED' ? 0 : currentRemMin + remainingSegmentsMin;
+
+  // Overall route progress (0 to 100%)
+  const overallProgressPercent =
+    navState === 'ARRIVED'
+      ? 100
+      : isSimulating
+        ? Math.min(100, Math.round(simulationProgress * 100))
+        : Math.min(
+            95,
+            Math.round(((currentSegmentIndex + 0.5) / Math.max(1, route.segments.length)) * 100)
+          );
+
+  // Primary street turn instruction for walking
+  const streetInstruction =
+    currentSegment?.turnInstructions?.[0] || currentSegment?.instruction || 'Suivez le tracé';
+  const lineColor =
+    currentSegment?.lineColor || getLineColor(currentSegment?.lineId || 'T1');
+  const isWarningMode = Boolean(alightingWarning);
 
   return (
-    <View style={[styles.bottomSheet, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-      {/* Drag handle */}
-      <View style={styles.dragHandleWrapper}>
-        <View style={styles.dragHandle} />
-      </View>
-
-      {/* Alighting Alert Banner (1 stop before destination) */}
-      {alightingWarning && (
-        <View style={styles.warningBanner}>
-          <Text style={styles.warningBannerIcon}>🔔</Text>
-          <Text style={styles.warningBannerText}>{alightingWarning}</Text>
-        </View>
-      )}
-
-      {/* Navigation State Header */}
-      <View style={styles.headerRow}>
-        <View style={styles.navStateBadge}>
-          <View style={styles.livePulseDot} />
-          <Text style={styles.navStateBadgeText}>
-            {navState === 'WALKING_TO_STOP' && 'GUIDAGE PIÉTON VERS ARRÊT'}
-            {navState === 'ON_TRANSIT' && `À BORD · ${currentSegment.lineId || 'TRANSIT'}`}
-            {navState === 'TRANSFER' && 'CORRESPONDANCE QUAI À QUAI'}
-            {navState === 'WALKING_TO_DEST' && 'MARCHE VERS DESTINATION'}
-            {navState === 'ARRIVED' && 'ARRIVÉE À DESTINATION'}
-          </Text>
-        </View>
-        <Text style={styles.arrivalTime}>Arrivée estimée : {route.arrivalTime}</Text>
-      </View>
-
-      {/* Dynamic Geofenced Content */}
-      <View style={styles.stepContent}>
+    <View pointerEvents="box-none" style={styles.hudOverlay}>
+      {/* ===================================================================== */}
+      {/* TOP MANEUVER HUD BANNER (Google Maps Turn-by-Turn style)              */}
+      {/* ===================================================================== */}
+      <View
+        style={[
+          styles.topBanner,
+          { paddingTop: Math.max(insets.top + 8, 16) },
+          isWarningMode && styles.topBannerWarning,
+          navState === 'ARRIVED' && styles.topBannerArrived,
+        ]}
+      >
         {navState === 'ARRIVED' ? (
-          <View style={styles.arrivedBox}>
-            <Text style={styles.arrivedEmoji}>🎉</Text>
-            <Text style={styles.arrivedTitle}>Vous êtes arrivé à destination !</Text>
-            <Text style={styles.arrivedSubtitle}>
-              Trajet effectué en {route.totalDurationMinutes} minutes
-            </Text>
+          <View style={styles.maneuverRow}>
+            <View style={styles.arrowBoxArrived}>
+              <Text style={styles.bigEmoji}>🏁</Text>
+            </View>
+            <View style={styles.maneuverTexts}>
+              <Text style={styles.maneuverDistance}>Vous êtes arrivé</Text>
+              <Text style={styles.maneuverPrimary}>Destination atteinte avec succès</Text>
+            </View>
           </View>
         ) : navState === 'ON_TRANSIT' ? (
-          <View style={styles.transitContainer}>
-            <View style={styles.transitRow}>
-              <View
-                style={[
-                  styles.lineCircle,
-                  { backgroundColor: currentSegment.lineColor || COLORS.cassis },
-                ]}
-              >
-                <Text style={styles.lineCircleText}>{currentSegment.lineId}</Text>
-              </View>
-
-              <View style={styles.instructionColumn}>
-                <Text style={styles.instructionTitle}>{currentSegment.instruction}</Text>
-                {currentSegment.toStop && (
-                  <Text style={styles.subInstruction}>
-                    Descente prévue à {currentSegment.toStop.name}
-                  </Text>
-                )}
-              </View>
+          <View style={styles.maneuverRow}>
+            <View style={[styles.transitBadgeLarge, { backgroundColor: lineColor }]}>
+              <Text style={styles.transitBadgeText}>{currentSegment.lineId}</Text>
             </View>
-
-            {/* Real-time Stations Progress (Automatic Geofencing) */}
-            <View style={styles.progressContainer}>
-              <View style={styles.progressBarBackground}>
-                <View
-                  style={[
-                    styles.progressBarFill,
-                    {
-                      width: `${totalStops > 0 ? (passedStopsCount / totalStops) * 100 : 0}%`,
-                      backgroundColor: currentSegment.lineColor || COLORS.cassis,
-                    },
-                  ]}
-                />
-              </View>
-
-              <View style={styles.progressLabels}>
-                <Text style={styles.stopsRemainingText}>
-                  {remainingStops > 0
-                    ? `Encore ${remainingStops} arrêt${remainingStops > 1 ? 's' : ''}`
-                    : 'Arrêt de descente atteint'}
-                </Text>
-                <Text style={styles.stopsPassedCount}>
-                  {passedStopsCount} / {totalStops} arrêts franchis
-                </Text>
-              </View>
+            <View style={styles.maneuverTexts}>
+              {isWarningMode ? (
+                <>
+                  <Text style={styles.warningKicker}>🔔 PRÉPAREZ-VOUS À DESCENDRE</Text>
+                  <Text style={styles.maneuverPrimary} numberOfLines={2}>
+                    Prochain arrêt : {currentSegment.toStop?.name}
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.maneuverDistance}>
+                    Descendez à {currentSegment.toStop?.name}
+                  </Text>
+                  <Text style={styles.maneuverPrimary}>
+                    {remainingStops} arrêt{remainingStops > 1 ? 's' : ''} restant
+                    {remainingStops > 1 ? 's' : ''} ({remainingTransitMin} min)
+                  </Text>
+                </>
+              )}
+              <Text style={styles.maneuverSub} numberOfLines={1}>
+                {currentSegment.direction || currentSegment.lineName}
+              </Text>
             </View>
           </View>
         ) : (
-          <View style={styles.walkRow}>
-            <View style={styles.walkIconBox}>
-              <Text style={styles.walkEmoji}>🚶</Text>
+          <View style={styles.maneuverRow}>
+            <View style={styles.arrowBox}>
+              <Text style={styles.arrowIcon}>{getManeuverArrow(streetInstruction)}</Text>
             </View>
-            <View style={styles.instructionColumn}>
-              <Text style={styles.instructionTitle}>
+            <View style={styles.maneuverTexts}>
+              <Text style={styles.maneuverDistance}>
                 {distanceToNextStep > 0
-                  ? `Dans ${Math.round(distanceToNextStep)} m : ${currentSegment.instruction}`
-                  : currentSegment.instruction}
+                  ? `Dans ${Math.round(distanceToNextStep)} m`
+                  : navState === 'TRANSFER'
+                    ? 'Correspondance quai à quai'
+                    : 'En route à pied'}
               </Text>
-              <Text style={styles.subInstruction}>
-                {navState === 'WALKING_TO_STOP'
-                  ? 'Bascule automatique en montant dans le véhicule (< 30 m)'
-                  : 'Bascule automatique à l\'arrivée (< 25 m)'}
+              <Text style={styles.maneuverPrimary} numberOfLines={2}>
+                {streetInstruction}
+              </Text>
+              <Text style={styles.maneuverSub} numberOfLines={1}>
+                {navState === 'WALKING_TO_STOP' && currentSegment.toStop
+                  ? `Vers l'arrêt ${currentSegment.toStop.name} · Bascule auto (< 30 m)`
+                  : 'Guidage piéton GPS · Arrivée auto (< 25 m)'}
               </Text>
             </View>
           </View>
         )}
+
+        {/* Next Step Preview Strip inside Top Banner */}
+        {navState !== 'ARRIVED' && route.segments[currentSegmentIndex + 1] && (
+          <View style={styles.nextPreviewStrip}>
+            <Text style={styles.nextPreviewLabel}>Ensuite : </Text>
+            <Text style={styles.nextPreviewText} numberOfLines={1}>
+              {route.segments[currentSegmentIndex + 1].instruction}
+            </Text>
+          </View>
+        )}
       </View>
 
-      {/* Discreet GPS Simulation Controls for Testing/Demos */}
-      <View style={styles.simControlsCard}>
-        <View style={styles.simHeaderRow}>
-          <Text style={styles.simTitle}>Mode Démo / Simulateur GPS</Text>
-          <TouchableOpacity
-            style={[styles.simButton, isSimulating && styles.simButtonActive]}
-            onPress={isSimulating ? onStopSimulation : onStartSimulation}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.simButtonText}>
-              {isSimulating ? '⏸ Pause simulation' : '▶ Simuler déplacement'}
+      {/* ===================================================================== */}
+      {/* NON-BLOCKING LIVE WAZE CONTROLLER ALERT BANNER                        */}
+      {/* ===================================================================== */}
+      {liveControllerAlert && (
+        <View style={styles.wazeLiveAlert}>
+          <Text style={styles.wazeAlertIcon}>🚨</Text>
+          <View style={styles.wazeAlertTexts}>
+            <Text style={styles.wazeAlertTitle}>
+              Contrôle signalé devant vous ({liveControllerAlert.lineId})
             </Text>
-          </TouchableOpacity>
+            <Text style={styles.wazeAlertSub} numberOfLines={1}>
+              Arrêt {liveControllerAlert.stopName} · {liveControllerAlert.direction}
+            </Text>
+          </View>
+          {onDismissControllerAlert && (
+            <TouchableOpacity
+              style={styles.wazeDismissBtn}
+              onPress={() => onDismissControllerAlert(liveControllerAlert.id)}
+              activeOpacity={0.75}
+            >
+              <Text style={styles.wazeDismissText}>Vu</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
+      {/* Spacer allowing full map touch interaction in the middle */}
+      <View pointerEvents="none" style={styles.mapPassthrough} />
+
+      {/* ===================================================================== */}
+      {/* COMPACT BOTTOM CARD (ETA + Progress + Discreet Simulator + Quitter)   */}
+      {/* ===================================================================== */}
+      <View
+        style={[
+          styles.bottomCard,
+          { paddingBottom: Math.max(insets.bottom + 4, 14) },
+        ]}
+      >
+        {/* Route Progress Bar */}
+        <View style={styles.progressTrack}>
+          <View
+            style={[
+              styles.progressFill,
+              {
+                width: `${overallProgressPercent}%`,
+                backgroundColor: navState === 'ARRIVED' ? '#1E8E3E' : COLORS.cassis,
+              },
+            ]}
+          />
         </View>
 
-        {isSimulating && (
-          <View style={styles.simProgressTrack}>
-            <View
-              style={[
-                styles.simProgressBar,
-                { width: `${Math.round(simulationProgress * 100)}%` },
-              ]}
-            />
+        {/* Main Compact Row: Remaining Time / Arrival / Quit */}
+        <View style={styles.compactRow}>
+          <View style={styles.etaColumn}>
+            <View style={styles.etaTopLine}>
+              <Text style={styles.etaMinutes}>
+                {navState === 'ARRIVED' ? 'Arrivé' : `${totalRemainingMin} min`}
+              </Text>
+              <Text style={styles.etaArrival}>· Arrivée {route.arrivalTime}</Text>
+            </View>
+            <Text style={styles.etaSub} numberOfLines={1}>
+              {route.summary}
+            </Text>
+          </View>
+
+          <View style={styles.actionsGroup}>
+            {/* Discreet Demo GPS Simulator Toggle */}
+            <TouchableOpacity
+              style={[styles.simTogglePill, isSimulating && styles.simToggleActive]}
+              onPress={() => setShowSimMenu(prev => !prev)}
+              activeOpacity={0.75}
+            >
+              <Text style={styles.simToggleText}>{isSimulating ? '📡 Démo' : '⚙'}</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.quitButton}
+              onPress={onEndTrip}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.quitButtonText}>
+                {navState === 'ARRIVED' ? 'Terminer' : 'Quitter'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Discreet Expandable GPS Simulator Drawer (for Jury / Home testing) */}
+        {(showSimMenu || isSimulating) && navState !== 'ARRIVED' && (
+          <View style={styles.simBar}>
+            <Text style={styles.simBarLabel}>
+              Simulateur GPS ({Math.round(simulationProgress * 100)}%)
+            </Text>
+            <TouchableOpacity
+              style={[styles.simActionBtn, isSimulating && styles.simActionStop]}
+              onPress={isSimulating ? onStopSimulation : onStartSimulation}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.simActionText}>
+                {isSimulating ? '⏸ Pause' : '▶ Simuler le trajet GPS'}
+              </Text>
+            </TouchableOpacity>
           </View>
         )}
       </View>
-
-      {/* End Trip Action */}
-      <TouchableOpacity
-        style={styles.endButton}
-        onPress={onEndTrip}
-        activeOpacity={0.7}
-      >
-        <Text style={styles.endButtonText}>
-          {navState === 'ARRIVED' ? 'Terminer la course' : 'Quitter l\'itinéraire'}
-        </Text>
-      </TouchableOpacity>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  bottomSheet: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: COLORS.card,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 10,
+  hudOverlay: {
+    ...StyleSheet.absoluteFill,
+    justifyContent: 'space-between',
     zIndex: 50,
   },
-  dragHandleWrapper: {
-    alignItems: 'center',
-    paddingVertical: 6,
+  topBanner: {
+    backgroundColor: '#1E1B24',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.28,
+    shadowRadius: 10,
+    elevation: 10,
   },
-  dragHandle: {
-    width: 44,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: COLORS.borderStrong,
+  topBannerWarning: {
+    backgroundColor: '#B75500',
   },
-  warningBanner: {
+  topBannerArrived: {
+    backgroundColor: '#137333',
+  },
+  maneuverRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFF4E5',
-    borderWidth: 1.5,
-    borderColor: '#FFA117',
+  },
+  arrowBox: {
+    width: 54,
+    height: 54,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.14)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+  },
+  arrowBoxArrived: {
+    width: 54,
+    height: 54,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+  },
+  arrowIcon: {
+    color: '#FFFFFF',
+    fontSize: 30,
+    fontWeight: '900',
+  },
+  bigEmoji: {
+    fontSize: 28,
+  },
+  transitBadgeLarge: {
+    width: 54,
+    height: 54,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+  },
+  transitBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  maneuverTexts: {
+    flex: 1,
+  },
+  warningKicker: {
+    color: '#FFF3E0',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+    marginBottom: 2,
+  },
+  maneuverDistance: {
+    color: '#D2E3FC',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  maneuverPrimary: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  maneuverSub: {
+    color: 'rgba(255, 255, 255, 0.72)',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 3,
+  },
+  nextPreviewStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.14)',
+  },
+  nextPreviewLabel: {
+    color: 'rgba(255, 255, 255, 0.65)',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  nextPreviewText: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  wazeLiveAlert: {
+    marginHorizontal: 14,
+    marginTop: 10,
+    backgroundColor: '#C5221F',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 8,
+  },
+  wazeAlertIcon: {
+    fontSize: 20,
+    marginRight: 10,
+  },
+  wazeAlertTexts: {
+    flex: 1,
+  },
+  wazeAlertTitle: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  wazeAlertSub: {
+    color: '#FCE8E6',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  wazeDismissBtn: {
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    marginLeft: 8,
+  },
+  wazeDismissText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  mapPassthrough: {
+    flex: 1,
+  },
+  bottomCard: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingHorizontal: 18,
+    paddingTop: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
+    elevation: 12,
+  },
+  progressTrack: {
+    height: 4.5,
+    backgroundColor: '#E8EAED',
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginBottom: 12,
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 3,
+  },
+  compactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  etaColumn: {
+    flex: 1,
+    marginRight: 10,
+  },
+  etaTopLine: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 6,
+  },
+  etaMinutes: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#137333',
+  },
+  etaArrival: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#5F6368',
+  },
+  etaSub: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#70757A',
+    marginTop: 2,
+  },
+  actionsGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  simTogglePill: {
+    height: 40,
+    paddingHorizontal: 11,
+    borderRadius: 20,
+    backgroundColor: '#F1F3F4',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  simToggleActive: {
+    backgroundColor: '#FCE4EC',
+  },
+  simToggleText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: COLORS.cassis,
+  },
+  quitButton: {
+    backgroundColor: '#FCE8E6',
+    paddingHorizontal: 18,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#FAD2CF',
+  },
+  quitButtonText: {
+    color: '#C5221F',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  simBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F8F9FA',
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    marginBottom: 8,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#E8EAED',
   },
-  warningBannerIcon: {
-    fontSize: 18,
-    marginRight: 8,
+  simBarLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#5F6368',
   },
-  warningBannerText: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#B76E00',
-    flex: 1,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginVertical: 6,
-  },
-  navStateBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F3E5F5',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+  simActionBtn: {
+    backgroundColor: COLORS.cassis,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 8,
   },
-  livePulseDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: COLORS.success,
-    marginRight: 6,
+  simActionStop: {
+    backgroundColor: '#5F6368',
   },
-  navStateBadgeText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: COLORS.cassis,
-  },
-  arrivalTime: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: COLORS.textSecondary,
-  },
-  stepContent: {
-    marginVertical: 10,
-  },
-  arrivedBox: {
-    alignItems: 'center',
-    paddingVertical: 12,
-  },
-  arrivedEmoji: {
-    fontSize: 40,
-    marginBottom: 6,
-  },
-  arrivedTitle: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: COLORS.success,
-  },
-  arrivedSubtitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: COLORS.textSecondary,
-    marginTop: 4,
-  },
-  transitContainer: {
-    width: '100%',
-  },
-  transitRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  walkRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  lineCircle: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 14,
-  },
-  lineCircleText: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '900',
-  },
-  walkIconBox: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: COLORS.surface,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 14,
-  },
-  walkEmoji: {
-    fontSize: 22,
-  },
-  instructionColumn: {
-    flex: 1,
-  },
-  instructionTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: COLORS.textPrimary,
-  },
-  subInstruction: {
+  simActionText: {
+    color: '#FFFFFF',
     fontSize: 12,
-    fontWeight: '600',
-    color: COLORS.textSecondary,
-    marginTop: 3,
-  },
-  progressContainer: {
-    marginTop: 12,
-    backgroundColor: COLORS.surface,
-    padding: 10,
-    borderRadius: 10,
-  },
-  progressBarBackground: {
-    height: 6,
-    backgroundColor: COLORS.border,
-    borderRadius: 3,
-    overflow: 'hidden',
-  },
-  progressBarFill: {
-    height: '100%',
-    borderRadius: 3,
-  },
-  progressLabels: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 6,
-  },
-  stopsRemainingText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: COLORS.textPrimary,
-  },
-  stopsPassedCount: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: COLORS.textSecondary,
-  },
-  simControlsCard: {
-    backgroundColor: COLORS.background,
-    borderRadius: 10,
-    padding: 8,
-    marginVertical: 6,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  simHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  simTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: COLORS.textSecondary,
-  },
-  simButton: {
-    backgroundColor: '#EAEAEA',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  simButtonActive: {
-    backgroundColor: '#FFE5EC',
-  },
-  simButtonText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: COLORS.cassis,
-  },
-  simProgressTrack: {
-    height: 4,
-    backgroundColor: COLORS.border,
-    borderRadius: 2,
-    marginTop: 6,
-    overflow: 'hidden',
-  },
-  simProgressBar: {
-    height: '100%',
-    backgroundColor: COLORS.cassis,
-  },
-  endButton: {
-    backgroundColor: COLORS.surface,
-    borderRadius: 14,
-    paddingVertical: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    marginTop: 4,
-  },
-  endButtonText: {
-    color: COLORS.error,
-    fontSize: 14,
     fontWeight: '800',
   },
 });
