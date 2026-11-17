@@ -8,6 +8,7 @@ import {
 } from '../types';
 import {
   computeControllerProgression,
+  controllerBroadcastSchema,
   resolveDirectionTerminus,
   STATIONARY_TTL_MS,
 } from './controllerTrackerService';
@@ -228,6 +229,11 @@ export class ReportService {
     if (reportType === 'CONTROLLER') {
       const prog = computeControllerProgression(newReport, now);
       if (prog) {
+        newReport.latitude = prog.currentLatitude;
+        newReport.longitude = prog.currentLongitude;
+        newReport.snappedToLine = prog.snappedToLine;
+        newReport.currentStationName = prog.currentStopName;
+        newReport.upcomingStops = prog.upcomingStops;
         newReport.progression = prog;
       }
     }
@@ -270,6 +276,9 @@ export class ReportService {
           report.progression = nextProg;
           report.latitude = nextProg.currentLatitude;
           report.longitude = nextProg.currentLongitude;
+          report.snappedToLine = nextProg.snappedToLine;
+          report.currentStationName = nextProg.currentStopName;
+          report.upcomingStops = nextProg.upcomingStops;
         }
       }
 
@@ -306,10 +315,27 @@ export class ReportService {
       if (report.type === 'CONTROLLER') {
         const prog = computeControllerProgression(report, currentTime);
         if (prog && !prog.isExpired) {
-          active.push({
-            ...report,
+          const broadcastPayload = {
             latitude: prog.currentLatitude,
             longitude: prog.currentLongitude,
+            snappedToLine: prog.snappedToLine,
+            lineId: report.lineId,
+            currentStationName: prog.currentStopName,
+            upcomingStops: prog.upcomingStops,
+          };
+          const validated = controllerBroadcastSchema.safeParse(broadcastPayload);
+
+          active.push({
+            ...report,
+            latitude: validated.success ? validated.data.latitude : prog.currentLatitude,
+            longitude: validated.success ? validated.data.longitude : prog.currentLongitude,
+            snappedToLine: validated.success ? validated.data.snappedToLine : prog.snappedToLine,
+            currentStationName: validated.success
+              ? validated.data.currentStationName
+              : prog.currentStopName,
+            upcomingStops: validated.success
+              ? validated.data.upcomingStops
+              : prog.upcomingStops,
             progression: prog,
           });
           continue;

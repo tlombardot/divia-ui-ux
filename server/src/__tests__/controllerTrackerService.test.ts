@@ -1,15 +1,18 @@
 import { describe, expect, it } from 'vitest';
+import { DIJON_LINES } from '../data/dijonNetwork';
 import {
   buildRoutePredictiveAlerts,
   buildStationPredictiveAlerts,
   BUS_INTERSTATION_MS,
   computeControllerProgression,
+  controllerBroadcastSchema,
   STATIONARY_TTL_MS,
   TERMINUS_BUFFER_MS,
   TRAM_INTERSTATION_MS,
 } from '../services/controllerTrackerService';
 import { ReportService } from '../services/reportService';
 import { Report } from '../types';
+import { projectPointOntoPolyline } from '../utils/geometryTopology';
 
 function makeMovingReport(overrides: Partial<Report> = {}): Report {
   const now = 1_700_000_000_000;
@@ -87,7 +90,7 @@ describe('ControllerTrackerService — Predictive Stop-by-Stop Progression & Ter
       'Auditorium',
     ]);
     expect(prog?.upcomingStops.map(u => u.etaMinutes)).toEqual([2, 4, 6]);
-    expect(prog?.alertPolyline).toHaveLength(4); // currentStop + 3 upcoming stops
+    expect(prog?.alertPolyline.length).toBeGreaterThanOrEqual(4); // sliced along real rail vertices
 
     // Predictive alert for a commuter waiting at République
     const stationAlerts = buildStationPredictiveAlerts('hub-republique', [t1Report], t0);
@@ -188,5 +191,108 @@ describe('ControllerTrackerService — Predictive Stop-by-Stop Progression & Ter
     expect(voted.action).toBe('updated');
     expect(voted.report?.lastConfirmedStopId).toBe('hub-republique');
     expect(voted.report?.progression?.currentStopName).toBe('République');
+  });
+
+  it('(e) snaps STATIONARY and MOVING (+4 min & mid-segment) controllers within < 1m of T1 and L6 polylines', () => {
+    const t0 = 1_700_000_000_000;
+    const t1Line = DIJON_LINES.find(l => l.id === 'T1')!;
+    const l6Line = DIJON_LINES.find(l => l.id === 'L6')!;
+
+    // 1. T1 STATIONARY with slightly off-track coordinates (~80m off rail)
+    const t1Stationary = makeMovingReport({
+      id: 'ctrl-t1-stat',
+      lineId: 'T1',
+      stopId: 'hub-darcy',
+      stopName: 'Darcy',
+      latitude: 47.3242, // intentionally off-track
+      longitude: 5.0335,
+      direction: 'À quai (fixe)',
+      directionTerminus: 'STATIONARY',
+      reportedAt: t0,
+    });
+    const t1StatProg = computeControllerProgression(t1Stationary, t0, DIJON_LINES)!;
+    expect(t1StatProg.snappedToLine).toBe(true);
+    const t1StatDist = projectPointOntoPolyline(
+      [t1StatProg.currentLatitude, t1StatProg.currentLongitude],
+      t1Line.polyline
+    ).distanceMeters;
+    expect(t1StatDist).toBeLessThan(1);
+
+    // 2. T1 MOVING after 4 minutes AND mid-segment at 3 min 30 s
+    const t1Moving = makeMovingReport({
+      id: 'ctrl-t1-mov',
+      lineId: 'T1',
+      stopId: 'hub-darcy',
+      stopName: 'Darcy',
+      directionTerminus: 'Quetigny Centre',
+      reportedAt: t0,
+    });
+    for (const offsetMs of [4 * 60 * 1000, 3.5 * 60 * 1000]) {
+      const prog = computeControllerProgression(t1Moving, t0 + offsetMs, DIJON_LINES)!;
+      expect(prog.snappedToLine).toBe(true);
+      const dist = projectPointOntoPolyline(
+        [prog.currentLatitude, prog.currentLongitude],
+        t1Line.polyline
+      ).distanceMeters;
+      expect(dist).toBeLessThan(1);
+
+      const validPayload = controllerBroadcastSchema.safeParse({
+        latitude: prog.currentLatitude,
+        longitude: prog.currentLongitude,
+        snappedToLine: prog.snappedToLine,
+        lineId: 'T1',
+        currentStationName: prog.currentStopName,
+        upcomingStops: prog.upcomingStops,
+      });
+      expect(validPayload.success).toBe(true);
+    }
+
+    // 3. L6 STATIONARY & MOVING after 4 minutes (Toison d'Or -> Longvic)
+    const l6Stationary = makeMovingReport({
+      id: 'ctrl-l6-stat',
+      lineId: 'L6',
+      stopId: 'hub-republique',
+      stopName: 'République',
+      latitude: 47.3270, // off-street
+      longitude: 5.0468,
+      direction: 'À quai (fixe)',
+      directionTerminus: 'STATIONARY',
+      reportedAt: t0,
+    });
+    const l6StatProg = computeControllerProgression(l6Stationary, t0, DIJON_LINES)!;
+    expect(l6StatProg.snappedToLine).toBe(true);
+    expect(
+      projectPointOntoPolyline(
+        [l6StatProg.currentLatitude, l6StatProg.currentLongitude],
+        l6Line.polyline
+      ).distanceMeters
+    ).toBeLessThan(1);
+
+    const l6Moving = makeMovingReport({
+      id: 'ctrl-l6-mov',
+      lineId: 'L6',
+      stopId: 't2-toison',
+      stopName: "Toison d'Or",
+      direction: 'Dir. Longvic',
+      directionTerminus: 'Longvic',
+      reportedAt: t0,
+    });
+    const l6MovProg = computeControllerProgression(
+      l6Moving,
+      t0 + 4 * 60 * 1000,
+      DIJON_LINES
+    )!;
+    expect(l6MovProg.snappedToLine).toBe(true);
+    expect(
+      projectPointOntoPolyline(
+        [l6MovProg.currentLatitude, l6MovProg.currentLongitude],
+        l6Line.polyline
+      ).distanceMeters
+    ).toBeLessThan(1);
+
+    // Every vertex of alertPolyline must also lie directly on L6's polyline (< 1m)
+    for (const pt of l6MovProg.alertPolyline) {
+      expect(projectPointOntoPolyline(pt, l6Line.polyline).distanceMeters).toBeLessThan(1);
+    }
   });
 });

@@ -8,6 +8,13 @@ import {
   TransitStop,
   UpcomingStopPrediction,
 } from '../types';
+import {
+  interpolateAlongPolyline,
+  LatLng,
+  slicePolylineByDistances,
+  snapPointToPolyline,
+} from '../utils/geometryTopology';
+import { networkGeometryService } from './networkGeometryService';
 
 export const TRAM_INTERSTATION_MS = 2 * 60 * 1000; // 2 min per stop on T1/T2
 export const BUS_INTERSTATION_MS = 105 * 1000; // 1 min 45 s per stop on Lianes/Bus
@@ -18,6 +25,23 @@ export const controllerDirectionSchema = z.object({
   stationId: z.string().min(1).max(64),
   lineId: z.string().min(1).max(16),
   directionTerminus: z.string().min(1).max(128).trim(),
+});
+
+export const controllerBroadcastSchema = z.object({
+  latitude: z.number().min(47.08).max(47.56),
+  longitude: z.number().min(4.70).max(5.38),
+  snappedToLine: z.boolean(),
+  lineId: z.string().min(1).max(16),
+  currentStationName: z.string().min(1).max(128),
+  upcomingStops: z.array(
+    z.object({
+      stationId: z.string(),
+      stationName: z.string(),
+      latitude: z.number(),
+      longitude: z.number(),
+      etaMinutes: z.number().int().min(0),
+    })
+  ),
 });
 
 function normalizeStr(value: string): string {
@@ -102,24 +126,112 @@ export function getOrderedStopsForDirection(
 }
 
 /**
- * Pure predictive stop-by-stop controller progression calculator.
- * - STATIONARY: remains anchored on initial station until expiresAt (35 min + upvote extensions)
- * - MOVING: advances stop-by-stop (~2 min Tram / ~1 min 45 Bus) from initial/lastConfirmed stop
- *   to terminus, predicts next 3 upcoming stops with ETAs, and auto-expires 3 min after terminus.
+ * Resolve exact snapped coordinate and cumulative distance of a stop on a line's polyline
+ */
+function resolveStopOnLinePolyline(
+  stop: Pick<TransitStop, 'latitude' | 'longitude' | 'distanceAlongLineMeters'>,
+  polyline: LatLng[]
+): { latitude: number; longitude: number; distanceAlongLineMeters: number; snapped: boolean } {
+  if (polyline.length < 2) {
+    return {
+      latitude: stop.latitude,
+      longitude: stop.longitude,
+      distanceAlongLineMeters: stop.distanceAlongLineMeters ?? 0,
+      snapped: false,
+    };
+  }
+
+  const proj = snapPointToPolyline([stop.latitude, stop.longitude], polyline);
+  return {
+    latitude: proj.projected[0],
+    longitude: proj.projected[1],
+    distanceAlongLineMeters:
+      stop.distanceAlongLineMeters !== undefined
+        ? stop.distanceAlongLineMeters
+        : proj.distanceAlongLineMeters,
+    snapped: true,
+  };
+}
+
+/**
+ * Resolve exact geometric coordinates of a controller directly ON the line's polyline
+ * (both STATIONARY at a station and MOVING interpolated smoothly along polyline vertices).
+ */
+export function resolveControllerCoordinates(
+  line: TransitLine | undefined,
+  stopCoord: LatLng,
+  options?: {
+    targetDistanceAlongLineMeters?: number;
+  }
+): {
+  latitude: number;
+  longitude: number;
+  distanceAlongLineMeters: number;
+  snappedToLine: boolean;
+} {
+  if (!line || line.polyline.length < 2) {
+    return {
+      latitude: stopCoord[0],
+      longitude: stopCoord[1],
+      distanceAlongLineMeters: 0,
+      snappedToLine: false,
+    };
+  }
+
+  if (options?.targetDistanceAlongLineMeters !== undefined) {
+    const interpolated = interpolateAlongPolyline(
+      line.polyline,
+      options.targetDistanceAlongLineMeters
+    );
+    return {
+      latitude: interpolated[0],
+      longitude: interpolated[1],
+      distanceAlongLineMeters: Math.round(options.targetDistanceAlongLineMeters),
+      snappedToLine: true,
+    };
+  }
+
+  const snapped = snapPointToPolyline(stopCoord, line.polyline);
+  return {
+    latitude: snapped.projected[0],
+    longitude: snapped.projected[1],
+    distanceAlongLineMeters: snapped.distanceAlongLineMeters,
+    snappedToLine: true,
+  };
+}
+
+/**
+ * Pure predictive stop-by-stop controller progression calculator with mandatory polyline snapping:
+ * - STATIONARY: orthogonally snapped onto `lineId`'s polyline at `stationId` (0m offset)
+ * - MOVING: smoothly interpolated along `lineId`'s Google/official polyline vertices
+ *   between `startStation.distanceAlongLineMeters` and `terminus.distanceAlongLineMeters`,
+ *   with curve-hugging `alertPolyline` and auto-expiry 3 min after terminus.
  */
 export function computeControllerProgression(
   report: Report,
   currentTime: number = Date.now(),
-  lines: TransitLine[] = DIJON_LINES
+  lines: TransitLine[] = networkGeometryService.getCachedLinesSync()
 ): ControllerProgression | null {
   if (report.type !== 'CONTROLLER') return null;
 
-  const line = lines.find(l => l.id.toUpperCase() === report.lineId.toUpperCase());
+  const activeLines = lines.length > 0 ? lines : DIJON_LINES;
+  const line = activeLines.find(
+    l => l.id.toUpperCase() === report.lineId.toUpperCase()
+  );
   const directionTerminus = resolveDirectionTerminus(report, line);
 
-  // Stationary / fixed platform control or unknown line
-  if (directionTerminus === 'STATIONARY' || !line) {
+  const buildStationaryProgression = (): ControllerProgression => {
+    const lineStop = line?.stops.find(
+      s =>
+        s.id === report.stopId ||
+        normalizeStr(s.name) === normalizeStr(report.stopName)
+    );
+    const anchorCoord: LatLng = lineStop
+      ? [lineStop.latitude, lineStop.longitude]
+      : [report.latitude, report.longitude];
+    const resolved = resolveControllerCoordinates(line, anchorCoord);
     const isExpired = currentTime >= report.expiresAt || report.status !== 'active';
+
     return {
       mode: 'STATIONARY',
       directionTerminus: 'STATIONARY',
@@ -129,36 +241,25 @@ export function computeControllerProgression(
       currentStopName: report.stopName,
       currentStopIndex: 0,
       endStopIndex: 0,
-      currentLatitude: report.latitude,
-      currentLongitude: report.longitude,
+      currentLatitude: resolved.latitude,
+      currentLongitude: resolved.longitude,
+      distanceAlongLineMeters: resolved.distanceAlongLineMeters,
+      snappedToLine: resolved.snappedToLine,
       upcomingStops: [],
       alertPolyline: [],
       estimatedTerminusAt: report.expiresAt,
       isExpired,
       summaryText: `Contrôle fixe à quai · ${report.stopName}`,
     };
+  };
+
+  if (directionTerminus === 'STATIONARY' || !line) {
+    return buildStationaryProgression();
   }
 
   const orderedStops = getOrderedStopsForDirection(line, directionTerminus);
   if (!orderedStops || orderedStops.length < 2) {
-    const isExpired = currentTime >= report.expiresAt || report.status !== 'active';
-    return {
-      mode: 'STATIONARY',
-      directionTerminus: 'STATIONARY',
-      initialStopId: report.stopId,
-      initialStopName: report.stopName,
-      currentStopId: report.stopId,
-      currentStopName: report.stopName,
-      currentStopIndex: 0,
-      endStopIndex: 0,
-      currentLatitude: report.latitude,
-      currentLongitude: report.longitude,
-      upcomingStops: [],
-      alertPolyline: [],
-      estimatedTerminusAt: report.expiresAt,
-      isExpired,
-      summaryText: `Contrôle fixe à quai · ${report.stopName}`,
-    };
+    return buildStationaryProgression();
   }
 
   const anchorStopId = report.lastConfirmedStopId || report.stopId;
@@ -169,24 +270,7 @@ export function computeControllerProgression(
     );
   }
   if (startIndex === -1) {
-    const isExpired = currentTime >= report.expiresAt || report.status !== 'active';
-    return {
-      mode: 'STATIONARY',
-      directionTerminus: 'STATIONARY',
-      initialStopId: report.stopId,
-      initialStopName: report.stopName,
-      currentStopId: report.stopId,
-      currentStopName: report.stopName,
-      currentStopIndex: 0,
-      endStopIndex: 0,
-      currentLatitude: report.latitude,
-      currentLongitude: report.longitude,
-      upcomingStops: [],
-      alertPolyline: [],
-      estimatedTerminusAt: report.expiresAt,
-      isExpired,
-      summaryText: `Contrôle fixe à quai · ${report.stopName}`,
-    };
+    return buildStationaryProgression();
   }
 
   const endIndex = orderedStops.length - 1;
@@ -195,7 +279,8 @@ export function computeControllerProgression(
     line.category === 'TRAM' ? TRAM_INTERSTATION_MS : BUS_INTERSTATION_MS;
 
   const elapsedMs = Math.max(0, currentTime - anchorTime);
-  const stopsAdvanced = Math.floor(elapsedMs / interstationMs);
+  const exactStopsFloat = elapsedMs / interstationMs;
+  const stopsAdvanced = Math.floor(exactStopsFloat);
   const currentStopIndex = Math.min(startIndex + stopsAdvanced, endIndex);
   const remainingStopsFromAnchor = Math.max(0, endIndex - startIndex);
 
@@ -209,28 +294,61 @@ export function computeControllerProgression(
     report.status !== 'active';
 
   const currentStop = orderedStops[currentStopIndex];
+  const currentStopOnLine = resolveStopOnLinePolyline(currentStop, line.polyline);
 
-  // Next up to 3 upcoming stops with exact ETA in minutes
+  // Smoothly interpolate coordinates directly along the line's polyline vertices!
+  let targetDistanceAlongLine = currentStopOnLine.distanceAlongLineMeters;
+  if (currentStopIndex < endIndex) {
+    const nextStop = orderedStops[currentStopIndex + 1];
+    const nextStopOnLine = resolveStopOnLinePolyline(nextStop, line.polyline);
+    const fractionalProgress = Math.max(0, Math.min(1, exactStopsFloat - stopsAdvanced));
+    targetDistanceAlongLine =
+      currentStopOnLine.distanceAlongLineMeters +
+      (nextStopOnLine.distanceAlongLineMeters - currentStopOnLine.distanceAlongLineMeters) *
+        fractionalProgress;
+  }
+
+  const liveCoords = resolveControllerCoordinates(
+    line,
+    [currentStop.latitude, currentStop.longitude],
+    line.polyline.length >= 2
+      ? { targetDistanceAlongLineMeters: targetDistanceAlongLine }
+      : undefined
+  );
+
+  // Next up to 3 upcoming stops (with snapped coordinates on the line) + exact ETA
   const upcomingStops: UpcomingStopPrediction[] = [];
+  let lastUpcomingDist = liveCoords.distanceAlongLineMeters;
+
   for (let offset = 1; offset <= 3; offset++) {
     const idx = currentStopIndex + offset;
     if (idx > endIndex) break;
     const stop = orderedStops[idx];
+    const snappedStop = resolveStopOnLinePolyline(stop, line.polyline);
     const targetArrivalMs = anchorTime + (idx - startIndex) * interstationMs;
     const etaMinutes = Math.max(1, Math.ceil((targetArrivalMs - currentTime) / 60000));
+    lastUpcomingDist = snappedStop.distanceAlongLineMeters;
     upcomingStops.push({
       stationId: stop.id,
       stationName: stop.name,
-      latitude: stop.latitude,
-      longitude: stop.longitude,
+      latitude: snappedStop.latitude,
+      longitude: snappedStop.longitude,
       etaMinutes,
     });
   }
 
-  const alertPolyline: [number, number][] = [
-    [currentStop.latitude, currentStop.longitude],
-    ...upcomingStops.map(u => [u.latitude, u.longitude] as [number, number]),
-  ];
+  // Curve-hugging alert halo sliced directly along the line's real polyline!
+  const alertPolyline: LatLng[] =
+    line.polyline.length >= 2 && upcomingStops.length > 0
+      ? slicePolylineByDistances(
+          line.polyline,
+          liveCoords.distanceAlongLineMeters,
+          lastUpcomingDist
+        )
+      : [
+          [liveCoords.latitude, liveCoords.longitude],
+          ...upcomingStops.map(u => [u.latitude, u.longitude] as LatLng),
+        ];
 
   const summaryText =
     currentStop.id === report.stopId
@@ -246,8 +364,10 @@ export function computeControllerProgression(
     currentStopName: currentStop.name,
     currentStopIndex,
     endStopIndex: endIndex,
-    currentLatitude: currentStop.latitude,
-    currentLongitude: currentStop.longitude,
+    currentLatitude: liveCoords.latitude,
+    currentLongitude: liveCoords.longitude,
+    distanceAlongLineMeters: liveCoords.distanceAlongLineMeters,
+    snappedToLine: liveCoords.snappedToLine,
     upcomingStops,
     alertPolyline,
     estimatedTerminusAt,
@@ -258,13 +378,12 @@ export function computeControllerProgression(
 
 /**
  * Compute predictive controller alerts approaching or present at a specific station.
- * Checks both immediate next 3 stops and any downstream stop on the same line until terminus.
  */
 export function buildStationPredictiveAlerts(
   stationId: string,
   activeControllers: Report[],
   currentTime: number = Date.now(),
-  lines: TransitLine[] = DIJON_LINES
+  lines: TransitLine[] = networkGeometryService.getCachedLinesSync()
 ): PredictiveAlert[] {
   const alerts: PredictiveAlert[] = [];
 
@@ -274,7 +393,6 @@ export function buildStationPredictiveAlerts(
       report.progression || computeControllerProgression(report, currentTime, lines);
     if (!prog || prog.isExpired) continue;
 
-    // 1. Controller currently at this exact station (stationary or passing now)
     if (prog.currentStopId === stationId) {
       alerts.push({
         reportId: report.id,
@@ -292,7 +410,6 @@ export function buildStationPredictiveAlerts(
       continue;
     }
 
-    // 2. Controller heading toward this station along the line
     if (prog.mode === 'MOVING') {
       const upcomingMatch = prog.upcomingStops.find(u => u.stationId === stationId);
       if (upcomingMatch) {
@@ -309,7 +426,6 @@ export function buildStationPredictiveAlerts(
         continue;
       }
 
-      // Check further downstream stops up to terminus
       const line = lines.find(l => l.id.toUpperCase() === report.lineId.toUpperCase());
       if (!line) continue;
       const orderedStops = getOrderedStopsForDirection(line, prog.directionTerminus);
@@ -347,7 +463,7 @@ export function buildRoutePredictiveAlerts(
   stopIdsUsed: string[],
   activeControllers: Report[],
   currentTime: number = Date.now(),
-  lines: TransitLine[] = DIJON_LINES
+  lines: TransitLine[] = networkGeometryService.getCachedLinesSync()
 ): PredictiveAlert[] {
   const upperLines = new Set(linesUsed.map(l => l.toUpperCase()));
   const seenReportIds = new Set<string>();

@@ -120,6 +120,8 @@ export interface ControllerProgression {
   endStopIndex: number;
   currentLatitude: number;
   currentLongitude: number;
+  distanceAlongLineMeters?: number;
+  snappedToLine: boolean;
   upcomingStops: UpcomingStopPrediction[];
   alertPolyline: [number, number][];
   estimatedTerminusAt: number;
@@ -183,6 +185,9 @@ export interface Report {
   downvotes: number; // "Partis"
   reliabilityScore: number; // 0 - 100
   status: ReportStatus;
+  snappedToLine?: boolean;
+  currentStationName?: string;
+  upcomingStops?: UpcomingStopPrediction[];
   progression?: ControllerProgression;
 }
 
