@@ -89,7 +89,7 @@ app.get('/api/network/stops', (_req: Request, res: Response) => {
 });
 
 // Route calculation
-app.get('/api/routes', (req: Request, res: Response) => {
+app.get('/api/routes', async (req: Request, res: Response) => {
   const parseResult = routeQuerySchema.safeParse(req.query);
 
   if (!parseResult.success) {
@@ -100,8 +100,13 @@ app.get('/api/routes', (req: Request, res: Response) => {
     return;
   }
 
-  const routes = calculateRoutes(parseResult.data);
-  res.status(200).json({ routes });
+  try {
+    const routes = await calculateRoutes(parseResult.data);
+    res.status(200).json({ routes });
+  } catch (error) {
+    console.error('[Routing Error]:', error);
+    res.status(500).json({ error: 'Erreur lors du calcul d\'itinéraire' });
+  }
 });
 
 // Reports list

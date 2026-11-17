@@ -18,6 +18,26 @@ export interface TransitLine {
   polyline: [number, number][]; // [latitude, longitude]
 }
 
+export type RouteSegmentType = 'WALK' | 'TRANSIT' | 'TRANSFER';
+
+export interface RouteSegment {
+  type: RouteSegmentType;
+  instruction: string;
+  durationMinutes: number;
+  distanceMeters: number;
+  polyline: [number, number][]; // [latitude, longitude]
+  lineId?: string;
+  lineName?: string;
+  lineColor?: string;
+  direction?: string;
+  fromStop?: TransitStop;
+  toStop?: TransitStop;
+  stopsCount?: number;
+  passedStops?: TransitStop[];
+  turnInstructions?: string[];
+}
+
+// Legacy step interface for backwards compatibility
 export interface RouteStep {
   type: 'walk' | 'transit';
   instruction: string;
@@ -34,15 +54,20 @@ export interface RouteStep {
 
 export interface RouteOption {
   id: string;
+  title: string; // "Le plus rapide", "Direct sans correspondance", "100% à pied"
   departureTime: string;
   arrivalTime: string;
   totalDurationMinutes: number;
   walkingDurationMinutes: number;
   transitDurationMinutes: number;
   transfersCount: number;
-  steps: RouteStep[];
+  segments: RouteSegment[];
+  steps: RouteStep[]; // backward compat for clients still reading steps
   summary: string;
   nextDepartureMinutes: number;
+  hasControllerAlert: boolean;
+  alerts: Report[];
+  fullPolyline: [number, number][];
 }
 
 export type ReportStatus = 'active' | 'expired' | 'dismissed';
@@ -67,15 +92,17 @@ export interface Report {
 
 // Zod validation schemas (OWASP: Strict Input Validation)
 export const coordinateSchema = z.object({
-  latitude: z.number().min(47.25, 'Hors métropole dijonnaise').max(47.40, 'Hors métropole dijonnaise'),
-  longitude: z.number().min(4.95, 'Hors métropole dijonnaise').max(5.15, 'Hors métropole dijonnaise'),
+  latitude: z.number().min(47.20, 'Hors métropole dijonnaise').max(47.45, 'Hors métropole dijonnaise'),
+  longitude: z.number().min(4.90, 'Hors métropole dijonnaise').max(5.20, 'Hors métropole dijonnaise'),
 });
 
 export const routeQuerySchema = z.object({
-  fromLat: z.coerce.number().min(47.25).max(47.40),
-  fromLng: z.coerce.number().min(4.95).max(5.15),
-  toLat: z.coerce.number().min(47.25).max(47.40),
-  toLng: z.coerce.number().min(4.95).max(5.15),
+  fromLat: z.coerce.number().min(47.20).max(47.45),
+  fromLng: z.coerce.number().min(4.90).max(5.20),
+  fromLabel: z.string().max(160).optional(),
+  toLat: z.coerce.number().min(47.20).max(47.45),
+  toLng: z.coerce.number().min(4.90).max(5.20),
+  toLabel: z.string().max(160).optional(),
   departureTime: z.string().optional(),
 });
 
@@ -86,8 +113,8 @@ export const createReportSchema = z.object({
   stopName: z.string().min(1).max(128).trim(),
   lineId: z.string().min(1).max(16),
   lineName: z.string().min(1).max(64).trim(),
-  latitude: z.number().min(47.25).max(47.40),
-  longitude: z.number().min(4.95).max(5.15),
+  latitude: z.number().min(47.20).max(47.45),
+  longitude: z.number().min(4.90).max(5.20),
   direction: z.string().min(1).max(128).trim(),
   description: z.string().max(256).trim().optional(),
 });
