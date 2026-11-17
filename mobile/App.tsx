@@ -6,8 +6,8 @@ import MapView from 'react-native-maps';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { TransitMap } from './src/components/map/TransitMap';
 import { ActiveTripBottomSheet } from './src/components/navigation/ActiveTripBottomSheet';
+import { ReportBottomSheet } from './src/components/reports/ReportBottomSheet';
 import { ReportCard } from './src/components/reports/ReportCard';
-import { ReportModal } from './src/components/reports/ReportModal';
 import { DirectionsHeader } from './src/components/search/DirectionsHeader';
 import { FloatingSearchHeader } from './src/components/search/FloatingSearchHeader';
 import { NearbyStopsContent } from './src/components/sheet/NearbyStopsContent';
@@ -39,7 +39,7 @@ interface CoordPoint {
 export default function App() {
   const mapRef = useRef<MapView | null>(null);
   const { location, isDemoMode, refreshLocation } = useLocation();
-  const { reports, createReport, voteReport } = useReports();
+  const { reports, controllerReports, createReport, voteReport } = useReports();
   const { favoriteStops, isFavorite, toggleFavorite } = useFavoriteStations(location);
   const {
     activeRoute,
@@ -80,6 +80,7 @@ export default function App() {
 
   const [activeReportCard, setActiveReportCard] = useState<Report | null>(null);
   const [isReportModalVisible, setIsReportModalVisible] = useState<boolean>(false);
+  const [reportTargetStop, setReportTargetStop] = useState<TransitStop | null>(null);
   const [dismissedAlertId, setDismissedAlertId] = useState<string | null>(null);
 
   const isNavigating = navState !== 'IDLE';
@@ -290,11 +291,11 @@ export default function App() {
       .filter(s => s.type === 'TRANSIT' && s.lineId)
       .map(s => s.lineId as string);
 
-    const alert = reports.find(
-      r => r.status === 'active' && linesUsed.includes(r.lineId) && r.id !== dismissedAlertId
+    const alert = controllerReports.find(
+      r => linesUsed.includes(r.lineId) && r.id !== dismissedAlertId
     );
     return alert || null;
-  }, [isNavigating, activeRoute, reports, dismissedAlertId]);
+  }, [isNavigating, activeRoute, controllerReports, dismissedAlertId]);
 
   useEffect(() => {
     if (liveControllerAlert) {
@@ -328,7 +329,10 @@ export default function App() {
           floatingBottomOffset={floatingBottomOffset}
           hideFloatingButtons={!isNavigating && sheetSnap === 'full'}
           onSelectReport={report => setActiveReportCard(report)}
-          onOpenReportModal={() => setIsReportModalVisible(true)}
+          onOpenReportModal={() => {
+            setReportTargetStop(null);
+            setIsReportModalVisible(true);
+          }}
           onSelectStop={handleSelectStation}
           onRecenter={handleRecenter}
           onMapPanDrag={() => setIsFollowingUser(false)}
@@ -341,7 +345,7 @@ export default function App() {
             onSelectQuickStop={handleRouteToStop}
             showControllersOnly={showControllersOnly}
             onToggleControllersFilter={() => setShowControllersOnly(prev => !prev)}
-            activeReportsCount={reports.length}
+            activeReportsCount={controllerReports.length}
             isDemoMode={isDemoMode}
           />
         )}
@@ -406,6 +410,10 @@ export default function App() {
                   setSheetSnap('peek');
                 }}
                 onNavigateToStop={handleRouteToStop}
+                onReportAtStation={stop => {
+                  setReportTargetStop(stop);
+                  setIsReportModalVisible(true);
+                }}
                 onVoteReport={voteReport}
               />
             )}
@@ -472,11 +480,15 @@ export default function App() {
           />
         )}
 
-        {/* 2-Tap Waze Report Creation Modal */}
-        <ReportModal
+        {/* Redesigned Divia Waze & Crowd Reporting Bottom Sheet */}
+        <ReportBottomSheet
           visible={isReportModalVisible}
           userLocation={effectiveUserLocation}
-          onClose={() => setIsReportModalVisible(false)}
+          initialStop={reportTargetStop}
+          onClose={() => {
+            setIsReportModalVisible(false);
+            setReportTargetStop(null);
+          }}
           onSubmitReport={createReport}
         />
       </View>

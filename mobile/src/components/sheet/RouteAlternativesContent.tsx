@@ -9,6 +9,7 @@ import {
 import { getLineColor } from '../../data/dijonNetwork';
 import { COLORS } from '../../theme/colors';
 import { RouteOption } from '../../types';
+import { getCrowdBadgeTheme } from '../../utils/crowdUtils';
 
 interface RouteAlternativesContentProps {
   routes: RouteOption[];
@@ -139,14 +140,42 @@ export const RouteAlternativesContent: React.FC<RouteAlternativesContentProps> =
                 )}
               </View>
 
-              {/* Controller Alert Badge */}
-              {route.hasControllerAlert && (
-                <View style={styles.alertBanner}>
-                  <Text style={styles.alertIcon}>🚨</Text>
-                  <Text style={styles.alertText}>
-                    Contrôleurs signalés sur ce trajet ({route.alerts.length} alerte
-                    {route.alerts.length > 1 ? 's' : ''})
-                  </Text>
+              {/* Crowd & Controller Alerts Strip */}
+              {(route.crowdStatus || route.hasControllerAlert) && (
+                <View style={styles.signalsWrap}>
+                  {route.crowdStatus && (
+                    <View
+                      style={[
+                        styles.crowdPill,
+                        {
+                          backgroundColor: getCrowdBadgeTheme(route.crowdStatus.level).bgColor,
+                          borderColor: getCrowdBadgeTheme(route.crowdStatus.level).borderColor,
+                        },
+                      ]}
+                    >
+                      <Text style={styles.crowdIcon}>
+                        {getCrowdBadgeTheme(route.crowdStatus.level).icon}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.crowdText,
+                          { color: getCrowdBadgeTheme(route.crowdStatus.level).color },
+                        ]}
+                      >
+                        {route.crowdSummary || `${route.crowdStatus.label} (${route.crowdStatus.description})`}
+                        {route.crowdStatus.source === 'community' ? ' · ✓' : ''}
+                      </Text>
+                    </View>
+                  )}
+
+                  {route.hasControllerAlert && (
+                    <View style={styles.alertBanner}>
+                      <Text style={styles.alertIcon}>🚨</Text>
+                      <Text style={styles.alertText}>
+                        Contrôleurs signalés ({route.alerts.length})
+                      </Text>
+                    </View>
+                  )}
                 </View>
               )}
             </TouchableOpacity>
@@ -333,14 +362,35 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#5F6368',
   },
+  signalsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+  },
+  crowdPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 10,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderWidth: 1,
+  },
+  crowdIcon: {
+    fontSize: 12,
+    marginRight: 5,
+  },
+  crowdText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
   alertBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FCE8E6',
     borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    marginTop: 10,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
     borderWidth: 1,
     borderColor: '#FAD2CF',
   },

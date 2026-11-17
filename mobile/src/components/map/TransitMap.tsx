@@ -4,6 +4,7 @@ import MapView, { Marker, Polyline } from 'react-native-maps';
 import { ALL_DIJON_STOPS, DIJON_LINES, getLineColor } from '../../data/dijonNetwork';
 import { COLORS } from '../../theme/colors';
 import { Report, RouteOption, TransitStop, UserLocation } from '../../types';
+import { getCrowdBadgeTheme } from '../../utils/crowdUtils';
 
 interface TransitMapProps {
   userLocation: UserLocation;
@@ -193,10 +194,17 @@ export const TransitMap: React.FC<TransitMapProps> = ({
           </Marker>
         )}
 
-        {/* Clickable Major Transit Stops */}
+        {/* Clickable Major Transit Stops (with live crowd ring indicator) */}
         {!showControllersOnly &&
           ALL_DIJON_STOPS.map(stop => {
             const isSelected = stop.id === selectedStopId;
+            const crowdRep = reports.find(
+              r => r.type === 'CROWD' && r.status === 'active' && r.stopId === stop.id && r.crowdLevel
+            );
+            const crowdColor = crowdRep?.crowdLevel
+              ? getCrowdBadgeTheme(crowdRep.crowdLevel).color
+              : null;
+
             return (
               <Marker
                 key={stop.id}
@@ -210,12 +218,14 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                 <View
                   style={[
                     styles.stopMarker,
+                    crowdColor ? { borderColor: crowdColor, borderWidth: 3, width: 15, height: 15, borderRadius: 7.5 } : null,
                     isSelected && styles.stopMarkerSelected,
                   ]}
                 >
                   <View
                     style={[
                       styles.stopMarkerCenter,
+                      crowdColor ? { backgroundColor: crowdColor } : null,
                       isSelected && styles.stopMarkerCenterSelected,
                     ]}
                   />
@@ -225,28 +235,30 @@ export const TransitMap: React.FC<TransitMapProps> = ({
           })}
 
         {/* Active Controller Reports Markers (Waze) */}
-        {reports.map(report => (
-          <Marker
-            key={report.id}
-            coordinate={{
-              latitude: report.latitude,
-              longitude: report.longitude,
-            }}
-            onPress={() => onSelectReport(report)}
-          >
-            <View
-              style={[
-                styles.reportMarkerBox,
-                showControllersOnly && styles.reportMarkerEmphasized,
-              ]}
+        {reports
+          .filter(r => r.type === 'CONTROLLER' || !r.type)
+          .map(report => (
+            <Marker
+              key={report.id}
+              coordinate={{
+                latitude: report.latitude,
+                longitude: report.longitude,
+              }}
+              onPress={() => onSelectReport(report)}
             >
-              <Text style={styles.reportIcon}>🚨</Text>
-              <View style={styles.reportBadge}>
-                <Text style={styles.reportBadgeText}>{report.lineId}</Text>
+              <View
+                style={[
+                  styles.reportMarkerBox,
+                  showControllersOnly && styles.reportMarkerEmphasized,
+                ]}
+              >
+                <Text style={styles.reportIcon}>🚨</Text>
+                <View style={styles.reportBadge}>
+                  <Text style={styles.reportBadgeText}>{report.lineId}</Text>
+                </View>
               </View>
-            </View>
-          </Marker>
-        ))}
+            </Marker>
+          ))}
       </MapView>
 
       {/* Right Floating Controls Stack (above bottom sheet) */}
@@ -283,9 +295,11 @@ export const TransitMap: React.FC<TransitMapProps> = ({
             activeOpacity={0.85}
           >
             <Text style={styles.fabIcon}>🚨</Text>
-            {reports.length > 0 && (
+            {reports.filter(r => r.type === 'CONTROLLER' || !r.type).length > 0 && (
               <View style={styles.fabCounter}>
-                <Text style={styles.fabCounterText}>{reports.length}</Text>
+                <Text style={styles.fabCounterText}>
+                  {reports.filter(r => r.type === 'CONTROLLER' || !r.type).length}
+                </Text>
               </View>
             )}
           </TouchableOpacity>

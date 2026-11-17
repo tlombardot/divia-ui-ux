@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { getLineColor } from '../../data/dijonNetwork';
 import { RouteOption } from '../../types';
+import { getCrowdBadgeTheme } from '../../utils/crowdUtils';
 
 interface RouteTimelineContentProps {
   route: RouteOption;
@@ -194,6 +195,28 @@ export const RouteTimelineContent: React.FC<RouteTimelineContentProps> = ({
                       {seg.direction || seg.lineName}
                     </Text>
                   </View>
+
+                  {seg.crowdStatus && (
+                    <View
+                      style={[
+                        styles.timelineCrowdBadge,
+                        {
+                          backgroundColor: getCrowdBadgeTheme(seg.crowdStatus.level).bgColor,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.timelineCrowdText,
+                          { color: getCrowdBadgeTheme(seg.crowdStatus.level).color },
+                        ]}
+                      >
+                        {getCrowdBadgeTheme(seg.crowdStatus.level).icon}{' '}
+                        {seg.crowdStatus.label} · {seg.crowdStatus.description}
+                        {seg.crowdStatus.source === 'community' ? ' (vérifié)' : ''}
+                      </Text>
+                    </View>
+                  )}
 
                   {/* Clickable Accordion for Intermediate Stops */}
                   <TouchableOpacity
@@ -547,6 +570,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#3C4043',
+  },
+  timelineCrowdBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    marginTop: 6,
+  },
+  timelineCrowdText: {
+    fontSize: 11,
+    fontWeight: '800',
   },
   accordionBtn: {
     marginTop: 8,

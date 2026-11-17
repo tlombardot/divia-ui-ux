@@ -1,5 +1,5 @@
 import Constants from 'expo-constants';
-import { Report, RouteOption } from '../types';
+import { CrowdLevel, Report, ReportType, RouteOption } from '../types';
 
 /**
  * Hybrid connection resolver:
@@ -77,6 +77,7 @@ export class ApiService {
   }
 
   public async createReport(payload: {
+    type?: ReportType;
     stopId: string;
     stopName: string;
     lineId: string;
@@ -85,6 +86,7 @@ export class ApiService {
     longitude: number;
     direction: string;
     description?: string;
+    crowdLevel?: CrowdLevel;
   }): Promise<Report | null> {
     try {
       const response = await fetch(`${this.baseUrl}/api/reports`, {
