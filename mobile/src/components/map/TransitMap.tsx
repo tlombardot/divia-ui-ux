@@ -1,27 +1,35 @@
+import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { ALL_DIJON_STOPS, DIJON_LINES } from '../../data/dijonNetwork';
 import { COLORS } from '../../theme/colors';
-import { Report, TransitStop, UserLocation } from '../../types';
+import { Report, RouteOption, TransitStop, UserLocation } from '../../types';
 
 interface TransitMapProps {
   userLocation: UserLocation;
   reports: Report[];
+  activeRoute?: RouteOption | null;
   onSelectReport: (report: Report) => void;
   onOpenReportModal: () => void;
   onSelectStop?: (stop: TransitStop) => void;
+  onRecenter?: () => void;
+  mapRef?: React.RefObject<MapView | null>;
 }
 
 export const TransitMap: React.FC<TransitMapProps> = ({
   userLocation,
   reports,
+  activeRoute,
   onSelectReport,
   onOpenReportModal,
   onSelectStop,
+  onRecenter,
+  mapRef,
 }) => {
   return (
     <View style={styles.container}>
       <MapView
+        ref={mapRef}
         style={styles.map}
         initialRegion={{
           latitude: userLocation.latitude,
@@ -32,20 +40,58 @@ export const TransitMap: React.FC<TransitMapProps> = ({
         showsUserLocation={!userLocation.isDemoMode}
         showsCompass={false}
       >
-        {/* Draw Dijon Lines Polylines */}
+        {/* Draw Full Background Dijon Network Lines */}
         {DIJON_LINES.map(line => (
           <Polyline
-            key={line.id}
+            key={`network-${line.id}`}
             coordinates={line.polyline.map(([latitude, longitude]) => ({
               latitude,
               longitude,
             }))}
-            strokeColor={line.color}
-            strokeWidth={4.5}
+            strokeColor={activeRoute ? `${line.color}44` : line.color}
+            strokeWidth={activeRoute ? 2.5 : 4.5}
             lineCap="round"
             lineJoin="round"
           />
         ))}
+
+        {/* Draw Active Door-to-Door Route Segments */}
+        {activeRoute && activeRoute.segments && (
+          <>
+            {activeRoute.segments.map((segment, idx) => {
+              const coords = segment.polyline.map(([lat, lon]) => ({
+                latitude: lat,
+                longitude: lon,
+              }));
+
+              if (coords.length < 2) return null;
+
+              if (segment.type === 'WALK') {
+                return (
+                  <Polyline
+                    key={`seg-${idx}-walk`}
+                    coordinates={coords}
+                    strokeColor="#333333"
+                    strokeWidth={4.5}
+                    lineDashPattern={[6, 6]}
+                    lineCap="round"
+                  />
+                );
+              }
+
+              return (
+                <Polyline
+                  key={`seg-${idx}-transit`}
+                  coordinates={coords}
+                  strokeColor={segment.lineColor || COLORS.cassis}
+                  strokeWidth={6}
+                  lineCap="round"
+                  lineJoin="round"
+                />
+              );
+            })}
+          </>
+        )}
 
         {/* User Marker if in demo mode */}
         {userLocation.isDemoMode && (
@@ -103,6 +149,17 @@ export const TransitMap: React.FC<TransitMapProps> = ({
         ))}
       </MapView>
 
+      {/* Recenter Button */}
+      {onRecenter && (
+        <TouchableOpacity
+          style={styles.recenterBtn}
+          onPress={onRecenter}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.recenterIcon}>🎯</Text>
+        </TouchableOpacity>
+      )}
+
       {/* Floating Action Button (Waze style report in 2 taps) */}
       <TouchableOpacity
         style={styles.fabReport}
@@ -140,8 +197,8 @@ const styles = StyleSheet.create({
     borderColor: '#FFFFFF',
   },
   stopMarker: {
-    width: 12,
-    height: 12,
+    width: 11,
+    height: 11,
     borderRadius: 6,
     backgroundColor: '#FFFFFF',
     borderWidth: 2,
@@ -150,9 +207,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   stopMarkerCenter: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
+    width: 3,
+    height: 3,
+    borderRadius: 1.5,
     backgroundColor: COLORS.textPrimary,
   },
   reportMarkerBox: {
@@ -173,6 +230,26 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontSize: 9,
     fontWeight: '900',
+  },
+  recenterBtn: {
+    position: 'absolute',
+    top: 130,
+    right: 16,
+    backgroundColor: '#FFFFFF',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 4,
+    zIndex: 25,
+  },
+  recenterIcon: {
+    fontSize: 20,
   },
   fabReport: {
     position: 'absolute',

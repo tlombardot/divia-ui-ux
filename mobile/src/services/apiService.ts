@@ -33,10 +33,15 @@ export class ApiService {
     fromLat: number,
     fromLng: number,
     toLat: number,
-    toLng: number
+    toLng: number,
+    fromLabel?: string,
+    toLabel?: string
   ): Promise<RouteOption[]> {
     try {
-      const url = `${this.baseUrl}/api/routes?fromLat=${fromLat}&fromLng=${fromLng}&toLat=${toLat}&toLng=${toLng}`;
+      let url = `${this.baseUrl}/api/routes?fromLat=${fromLat}&fromLng=${fromLng}&toLat=${toLat}&toLng=${toLng}`;
+      if (fromLabel) url += `&fromLabel=${encodeURIComponent(fromLabel)}`;
+      if (toLabel) url += `&toLabel=${encodeURIComponent(toLabel)}`;
+
       const response = await fetch(url, {
         headers: { Accept: 'application/json' },
       });

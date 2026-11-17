@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   ScrollView,
   StyleSheet,
   Text,
@@ -7,28 +9,74 @@ import {
   View,
 } from 'react-native';
 import { QUICK_STOPS } from '../../data/dijonNetwork';
+import { geocodingService } from '../../services/geocodingService';
 import { COLORS } from '../../theme/colors';
-import { RouteOption, TransitStop } from '../../types';
+import { GeocodedAddress, RouteOption, TransitStop } from '../../types';
 
 interface RouteSearchBarProps {
+  originText: string;
   destinationText: string;
+  onOriginChange: (text: string) => void;
   onDestinationChange: (text: string) => void;
+  onSelectAddress: (address: GeocodedAddress, targetField: 'origin' | 'destination') => void;
   onSelectQuickStop: (stop: TransitStop) => void;
   selectedRoute: RouteOption | null;
   availableRoutes: RouteOption[];
   onSelectRoute: (route: RouteOption) => void;
   onStartNavigation: () => void;
+  isLoadingRoutes?: boolean;
 }
 
 export const RouteSearchBar: React.FC<RouteSearchBarProps> = ({
+  originText,
   destinationText,
+  onOriginChange,
   onDestinationChange,
+  onSelectAddress,
   onSelectQuickStop,
   selectedRoute,
   availableRoutes,
   onSelectRoute,
   onStartNavigation,
+  isLoadingRoutes = false,
 }) => {
+  const [activeSearchField, setActiveSearchField] = useState<'origin' | 'destination' | null>(null);
+  const [autocompleteResults, setAutocompleteResults] = useState<GeocodedAddress[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+
+  // Autocomplétion BAN + Arrêts Divia en temps réel
+  useEffect(() => {
+    const query = activeSearchField === 'origin' ? originText : destinationText;
+    if (!activeSearchField || query.length < 2) {
+      setAutocompleteResults([]);
+      return;
+    }
+
+    let isMounted = true;
+    setIsSearching(true);
+
+    const timer = setTimeout(async () => {
+      const results = await geocodingService.searchAddresses(query);
+      if (isMounted) {
+        setAutocompleteResults(results);
+        setIsSearching(false);
+      }
+    }, 200);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [originText, destinationText, activeSearchField]);
+
+  const handleSelectResult = (address: GeocodedAddress) => {
+    if (activeSearchField) {
+      onSelectAddress(address, activeSearchField);
+      setActiveSearchField(null);
+      setAutocompleteResults([]);
+    }
+  };
+
   return (
     <View style={styles.card}>
       {/* Origin / Destination Connected Inputs */}
@@ -40,45 +88,99 @@ export const RouteSearchBar: React.FC<RouteSearchBarProps> = ({
         </View>
 
         <View style={styles.inputsColumn}>
-          <View style={styles.inputBox}>
-            <Text style={styles.originLabel}>Ma position actuelle (GPS)</Text>
-          </View>
-          <View style={styles.inputDivider} />
+          {/* Depart */}
           <View style={styles.inputBox}>
             <TextInput
               style={styles.textInput}
-              placeholder="Où allez-vous ? (ex: Gare, Université, Darcy)"
+              placeholder="Départ (ex: Ma position, Darcy, Gare...)"
+              placeholderTextColor={COLORS.textMuted}
+              value={originText}
+              onChangeText={t => {
+                onOriginChange(t);
+                setActiveSearchField('origin');
+              }}
+              onFocus={() => setActiveSearchField('origin')}
+              autoCorrect={false}
+            />
+          </View>
+
+          <View style={styles.inputDivider} />
+
+          {/* Arrivee */}
+          <View style={styles.inputBox}>
+            <TextInput
+              style={styles.textInput}
+              placeholder="Destination (ex: 12 Rue de la Liberté, Toison d'Or...)"
               placeholderTextColor={COLORS.textMuted}
               value={destinationText}
-              onChangeText={onDestinationChange}
+              onChangeText={t => {
+                onDestinationChange(t);
+                setActiveSearchField('destination');
+              }}
+              onFocus={() => setActiveSearchField('destination')}
               autoCorrect={false}
             />
           </View>
         </View>
       </View>
 
-      {/* Quick Stop Chips */}
-      <View style={styles.chipsSection}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chipsScroll}
-        >
-          {QUICK_STOPS.map(stop => (
+      {/* Autocomplete Dropdown List */}
+      {activeSearchField && autocompleteResults.length > 0 && (
+        <View style={styles.autocompleteCard}>
+          {isSearching && (
+            <ActivityIndicator size="small" color={COLORS.cassis} style={styles.loader} />
+          )}
+          {autocompleteResults.map(item => (
             <TouchableOpacity
-              key={stop.id}
-              style={styles.chip}
-              onPress={() => onSelectQuickStop(stop)}
+              key={item.id}
+              style={styles.autocompleteItem}
+              onPress={() => handleSelectResult(item)}
               activeOpacity={0.7}
             >
-              <Text style={styles.chipText}>{stop.name}</Text>
+              <Text style={styles.autocompleteIcon}>
+                {item.type === 'stop' ? '🚏' : item.type === 'poi' ? '📍' : '🏠'}
+              </Text>
+              <View style={styles.autocompleteTexts}>
+                <Text style={styles.autocompleteLabel}>{item.label}</Text>
+                <Text style={styles.autocompleteContext}>{item.context}</Text>
+              </View>
             </TouchableOpacity>
           ))}
-        </ScrollView>
-      </View>
+        </View>
+      )}
+
+      {/* Quick Stop Chips */}
+      {!activeSearchField && (
+        <View style={styles.chipsSection}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chipsScroll}
+          >
+            {QUICK_STOPS.map(stop => (
+              <TouchableOpacity
+                key={stop.id}
+                style={styles.chip}
+                onPress={() => onSelectQuickStop(stop)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.chipText}>{stop.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+
+      {/* Loading state */}
+      {isLoadingRoutes && (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="small" color={COLORS.cassis} />
+          <Text style={styles.loadingText}>Calcul des meilleurs itinéraires...</Text>
+        </View>
+      )}
 
       {/* Route Proposals */}
-      {availableRoutes.length > 0 && (
+      {!activeSearchField && availableRoutes.length > 0 && (
         <View style={styles.routesList}>
           {availableRoutes.map(route => {
             const isSelected = selectedRoute?.id === route.id;
@@ -90,42 +192,66 @@ export const RouteSearchBar: React.FC<RouteSearchBarProps> = ({
                 activeOpacity={0.8}
               >
                 <View style={styles.routeHeader}>
-                  <View style={styles.routeBadges}>
-                    {route.steps
-                      .filter(s => s.type === 'transit' && s.lineId)
-                      .map((step, idx) => (
-                        <View
-                          key={idx}
-                          style={[
-                            styles.lineBadge,
-                            { backgroundColor: step.lineColor || COLORS.cassis },
-                          ]}
-                        >
-                          <Text style={styles.lineBadgeText}>{step.lineId}</Text>
-                        </View>
-                      ))}
-                    {route.steps.every(s => s.type === 'walk') && (
-                      <View style={[styles.lineBadge, { backgroundColor: '#757575' }]}>
-                        <Text style={styles.lineBadgeText}>À pied</Text>
-                      </View>
-                    )}
+                  <View style={styles.titleWithBadges}>
+                    <Text style={styles.routeTitle}>{route.title || route.summary}</Text>
+                    <View style={styles.badgesRow}>
+                      {route.segments
+                        ? route.segments.map((seg, idx) => {
+                            if (seg.type === 'TRANSIT' && seg.lineId) {
+                              return (
+                                <View
+                                  key={idx}
+                                  style={[
+                                    styles.lineBadge,
+                                    { backgroundColor: seg.lineColor || COLORS.cassis },
+                                  ]}
+                                >
+                                  <Text style={styles.lineBadgeText}>{seg.lineId}</Text>
+                                </View>
+                              );
+                            }
+                            if (seg.type === 'WALK') {
+                              return (
+                                <View key={idx} style={styles.walkBadge}>
+                                  <Text style={styles.walkBadgeText}>🚶 {seg.durationMinutes}m</Text>
+                                </View>
+                              );
+                            }
+                            return null;
+                          })
+                        : route.steps
+                            .filter(s => s.type === 'transit' && s.lineId)
+                            .map((step, idx) => (
+                              <View
+                                key={idx}
+                                style={[
+                                  styles.lineBadge,
+                                  { backgroundColor: step.lineColor || COLORS.cassis },
+                                ]}
+                              >
+                                <Text style={styles.lineBadgeText}>{step.lineId}</Text>
+                              </View>
+                            ))}
+                    </View>
                   </View>
 
-                  <View style={styles.liveIndicator}>
-                    <Text style={styles.liveDeparture}>
-                      Prochain départ dans {route.nextDepartureMinutes} min
+                  <View style={styles.durationBox}>
+                    <Text style={styles.durationBig}>{route.totalDurationMinutes} min</Text>
+                    <Text style={styles.durationTimes}>
+                      {route.departureTime} - {route.arrivalTime}
                     </Text>
                   </View>
                 </View>
 
-                <View style={styles.routeFooter}>
-                  <Text style={styles.routeDuration}>
-                    {route.totalDurationMinutes} min
-                  </Text>
-                  <Text style={styles.routeTimes}>
-                    {route.departureTime} ➜ {route.arrivalTime}
-                  </Text>
-                </View>
+                {/* Controller Alert Banner if active on this route */}
+                {route.hasControllerAlert && (
+                  <View style={styles.controllerAlertBadge}>
+                    <Text style={styles.alertIcon}>🚨</Text>
+                    <Text style={styles.alertText}>
+                      Contrôle signalé sur ce tracé ({route.alerts?.length || 1} alerte active)
+                    </Text>
+                  </View>
+                )}
               </TouchableOpacity>
             );
           })}
@@ -137,7 +263,7 @@ export const RouteSearchBar: React.FC<RouteSearchBarProps> = ({
               activeOpacity={0.85}
             >
               <Text style={styles.startButtonText}>
-                Démarrer l'itinéraire ({selectedRoute.totalDurationMinutes} min)
+                Démarrer la navigation GPS ({selectedRoute.totalDurationMinutes} min)
               </Text>
             </TouchableOpacity>
           )}
@@ -159,7 +285,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 10,
     elevation: 5,
-    zIndex: 20,
+    zIndex: 30,
   },
   inputsWrapper: {
     flexDirection: 'row',
@@ -181,9 +307,9 @@ const styles = StyleSheet.create({
   },
   connectingLine: {
     width: 2,
-    height: 22,
+    height: 24,
     backgroundColor: COLORS.borderStrong,
-    marginVertical: 3,
+    marginVertical: 2,
   },
   destSquare: {
     width: 10,
@@ -198,11 +324,6 @@ const styles = StyleSheet.create({
     height: 32,
     justifyContent: 'center',
   },
-  originLabel: {
-    fontSize: 13,
-    color: COLORS.textSecondary,
-    fontWeight: '600',
-  },
   inputDivider: {
     height: 1,
     backgroundColor: COLORS.border,
@@ -213,6 +334,42 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     fontWeight: '600',
     padding: 0,
+  },
+  autocompleteCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    maxHeight: 220,
+  },
+  loader: {
+    paddingVertical: 6,
+  },
+  autocompleteItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.surface,
+  },
+  autocompleteIcon: {
+    fontSize: 18,
+    marginRight: 10,
+  },
+  autocompleteTexts: {
+    flex: 1,
+  },
+  autocompleteLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.textPrimary,
+  },
+  autocompleteContext: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    marginTop: 2,
   },
   chipsSection: {
     marginTop: 10,
@@ -234,6 +391,18 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: COLORS.textPrimary,
   },
+  loadingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    gap: 10,
+  },
+  loadingText: {
+    fontSize: 13,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+  },
   routesList: {
     marginTop: 12,
     gap: 8,
@@ -252,11 +421,22 @@ const styles = StyleSheet.create({
   routeHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
   },
-  routeBadges: {
+  titleWithBadges: {
+    flex: 1,
+  },
+  routeTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.textPrimary,
+    marginBottom: 6,
+  },
+  badgesRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 6,
+    alignItems: 'center',
   },
   lineBadge: {
     paddingHorizontal: 8,
@@ -266,38 +446,59 @@ const styles = StyleSheet.create({
   lineBadgeText: {
     color: '#FFF',
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '900',
   },
-  liveIndicator: {
-    backgroundColor: '#E6F4EA',
-    paddingHorizontal: 8,
+  walkBadge: {
+    backgroundColor: COLORS.surface,
+    paddingHorizontal: 7,
     paddingVertical: 3,
     borderRadius: 6,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
-  liveDeparture: {
+  walkBadgeText: {
     fontSize: 11,
     fontWeight: '700',
-    color: COLORS.success,
+    color: COLORS.textSecondary,
   },
-  routeFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 8,
+  durationBox: {
+    alignItems: 'flex-end',
+    marginLeft: 10,
   },
-  routeDuration: {
-    fontSize: 17,
-    fontWeight: '800',
+  durationBig: {
+    fontSize: 18,
+    fontWeight: '900',
     color: COLORS.textPrimary,
   },
-  routeTimes: {
-    fontSize: 13,
+  durationTimes: {
+    fontSize: 12,
     fontWeight: '600',
     color: COLORS.textSecondary,
+    marginTop: 2,
+  },
+  controllerAlertBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FDEDED',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  alertIcon: {
+    fontSize: 14,
+    marginRight: 6,
+  },
+  alertText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.error,
   },
   startButton: {
     backgroundColor: COLORS.cassis,
-    borderRadius: 12,
+    borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
     marginTop: 8,
@@ -305,6 +506,6 @@ const styles = StyleSheet.create({
   startButtonText: {
     color: COLORS.textOnPrimary,
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: '800',
   },
 });

@@ -16,6 +16,25 @@ export interface TransitLine {
   polyline: [number, number][]; // [lat, lng]
 }
 
+export type RouteSegmentType = 'WALK' | 'TRANSIT' | 'TRANSFER';
+
+export interface RouteSegment {
+  type: RouteSegmentType;
+  instruction: string;
+  durationMinutes: number;
+  distanceMeters: number;
+  polyline: [number, number][]; // [lat, lng]
+  lineId?: string;
+  lineName?: string;
+  lineColor?: string;
+  direction?: string;
+  fromStop?: TransitStop;
+  toStop?: TransitStop;
+  stopsCount?: number;
+  passedStops?: TransitStop[];
+  turnInstructions?: string[];
+}
+
 export interface RouteStep {
   type: 'walk' | 'transit';
   instruction: string;
@@ -32,15 +51,20 @@ export interface RouteStep {
 
 export interface RouteOption {
   id: string;
+  title: string;
   departureTime: string;
   arrivalTime: string;
   totalDurationMinutes: number;
   walkingDurationMinutes: number;
   transitDurationMinutes: number;
   transfersCount: number;
+  segments: RouteSegment[];
   steps: RouteStep[];
   summary: string;
   nextDepartureMinutes: number;
+  hasControllerAlert: boolean;
+  alerts: Report[];
+  fullPolyline: [number, number][];
 }
 
 export interface Report {
@@ -66,10 +90,23 @@ export interface UserLocation {
   longitude: number;
   isDemoMode: boolean;
   accuracy?: number | null;
+  heading?: number | null;
+  speed?: number | null;
 }
 
 export interface SavedNavigationState {
   activeRoute: RouteOption;
+  currentSegmentIndex?: number;
   currentStepIndex: number;
   startedAt: number;
+  navState?: string;
+}
+
+export interface GeocodedAddress {
+  id: string;
+  label: string;
+  context: string;
+  latitude: number;
+  longitude: number;
+  type: 'address' | 'stop' | 'poi';
 }

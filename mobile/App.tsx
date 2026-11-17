@@ -8,12 +8,11 @@ import { ActiveTripBottomSheet } from './src/components/navigation/ActiveTripBot
 import { RouteSearchBar } from './src/components/navigation/RouteSearchBar';
 import { ReportCard } from './src/components/reports/ReportCard';
 import { ReportModal } from './src/components/reports/ReportModal';
-import { ALL_DIJON_STOPS } from './src/data/dijonNetwork';
 import { useLocation } from './src/hooks/useLocation';
 import { useNavigationState } from './src/hooks/useNavigationState';
 import { useReports } from './src/hooks/useReports';
 import { apiService } from './src/services/apiService';
-import { Report, RouteOption, TransitStop } from './src/types';
+import { GeocodedAddress, Report, RouteOption, TransitStop } from './src/types';
 
 export default function App() {
   const { location, isDemoMode, refreshLocation } = useLocation();
@@ -27,85 +26,159 @@ export default function App() {
     endTrip,
   } = useNavigationState();
 
+  const [originText, setOriginText] = useState<string>('Ma position (GPS)');
   const [destinationText, setDestinationText] = useState<string>('');
+  const [originCoords, setOriginCoords] = useState<{ lat: number; lng: number; label: string }>({
+    lat: location.latitude,
+    lng: location.longitude,
+    label: 'Ma position (GPS)',
+  });
   const [availableRoutes, setAvailableRoutes] = useState<RouteOption[]>([]);
   const [selectedRoute, setSelectedRoute] = useState<RouteOption | null>(null);
   const [activeReportCard, setActiveReportCard] = useState<Report | null>(null);
   const [isReportModalVisible, setIsReportModalVisible] = useState<boolean>(false);
+  const [isLoadingRoutes, setIsLoadingRoutes] = useState<boolean>(false);
 
-  // Search routes to a destination stop
-  const handleSelectQuickStop = useCallback(
-    async (stop: TransitStop) => {
-      setDestinationText(stop.name);
+  // Search routes to a target coordinate
+  const fetchRouteAlternatives = useCallback(
+    async (
+      fromLat: number,
+      fromLng: number,
+      toLat: number,
+      toLng: number,
+      fromLabel: string,
+      toLabel: string
+    ) => {
+      setIsLoadingRoutes(true);
+      try {
+        const routes = await apiService.fetchRoutes(
+          fromLat,
+          fromLng,
+          toLat,
+          toLng,
+          fromLabel,
+          toLabel
+        );
 
-      const routes = await apiService.fetchRoutes(
-        location.latitude,
-        location.longitude,
-        stop.latitude,
-        stop.longitude
-      );
-
-      if (routes.length > 0) {
-        setAvailableRoutes(routes);
-        setSelectedRoute(routes[0]);
-      } else {
-        // Fallback local route computation for standalone Expo Go preview
-        const directRoute: RouteOption = {
-          id: `route-client-fallback-${stop.id}`,
-          departureTime: '18:35',
-          arrivalTime: '18:48',
-          totalDurationMinutes: 13,
-          walkingDurationMinutes: 3,
-          transitDurationMinutes: 10,
-          transfersCount: 0,
-          summary: `${stop.lines[0] || 'T1'} direct`,
-          nextDepartureMinutes: 2,
-          steps: [
-            {
-              type: 'walk',
-              instruction: `Marcher jusqu'à l'arrêt le plus proche (120 m)`,
-              durationMinutes: 2,
-              distanceMeters: 120,
-            },
-            {
-              type: 'transit',
-              instruction: `Prendre le Tram ${stop.lines[0] || 'T1'}`,
-              durationMinutes: 9,
-              distanceMeters: 1800,
-              lineId: stop.lines[0] || 'T1',
-              lineColor: stop.lines[0] === 'T2' ? '#4B2982' : '#E11535',
-              toStop: stop,
-              stopsCount: 4,
-            },
-            {
-              type: 'walk',
-              instruction: `Arrivée à ${stop.name}`,
-              durationMinutes: 2,
-              distanceMeters: 80,
-            },
-          ],
-        };
-        setAvailableRoutes([directRoute]);
-        setSelectedRoute(directRoute);
+        if (routes.length > 0) {
+          setAvailableRoutes(routes);
+          setSelectedRoute(routes[0]);
+        } else {
+          // Fallback client route
+          const fallbackRoute: RouteOption = {
+            id: `route-client-fallback-${Date.now()}`,
+            title: 'Itinéraire direct',
+            departureTime: '19:00',
+            arrivalTime: '19:15',
+            totalDurationMinutes: 15,
+            walkingDurationMinutes: 4,
+            transitDurationMinutes: 11,
+            transfersCount: 0,
+            summary: `T1 direct jusqu'à ${toLabel}`,
+            nextDepartureMinutes: 2,
+            hasControllerAlert: false,
+            alerts: [],
+            fullPolyline: [[fromLat, fromLng], [toLat, toLng]],
+            segments: [
+              {
+                type: 'WALK',
+                instruction: 'Marcher jusqu\'à l\'arrêt de tramway',
+                durationMinutes: 2,
+                distanceMeters: 150,
+                polyline: [[fromLat, fromLng], [fromLat + 0.001, fromLng + 0.001]],
+              },
+              {
+                type: 'TRANSIT',
+                instruction: 'Prendre le Tram T1',
+                durationMinutes: 11,
+                distanceMeters: 2200,
+                polyline: [[fromLat + 0.001, fromLng + 0.001], [toLat - 0.001, toLng - 0.001]],
+                lineId: 'T1',
+                lineColor: '#E11535',
+              },
+              {
+                type: 'WALK',
+                instruction: `Marcher jusqu'à ${toLabel}`,
+                durationMinutes: 2,
+                distanceMeters: 100,
+                polyline: [[toLat - 0.001, toLng - 0.001], [toLat, toLng]],
+              },
+            ],
+            steps: [
+              {
+                type: 'walk',
+                instruction: 'Marcher jusqu\'à l\'arrêt le plus proche',
+                durationMinutes: 2,
+                distanceMeters: 150,
+              },
+              {
+                type: 'transit',
+                instruction: 'Prendre le Tram T1',
+                durationMinutes: 11,
+                distanceMeters: 2200,
+                lineId: 'T1',
+                lineColor: '#E11535',
+              },
+              {
+                type: 'walk',
+                instruction: `Arrivée à ${toLabel}`,
+                durationMinutes: 2,
+                distanceMeters: 100,
+              },
+            ],
+          };
+          setAvailableRoutes([fallbackRoute]);
+          setSelectedRoute(fallbackRoute);
+        }
+      } catch (err) {
+        console.warn('[App] Erreur lors de la recherche d\'itinéraires:', err);
+      } finally {
+        setIsLoadingRoutes(false);
       }
     },
-    [location.latitude, location.longitude]
+    []
   );
 
-  const handleDestinationTextChange = (text: string) => {
-    setDestinationText(text);
-    if (text.length > 2) {
-      const matched = ALL_DIJON_STOPS.find(s =>
-        s.name.toLowerCase().includes(text.toLowerCase())
+  // Quick chip stop selection
+  const handleSelectQuickStop = useCallback(
+    (stop: TransitStop) => {
+      setDestinationText(stop.name);
+      fetchRouteAlternatives(
+        originCoords.lat || location.latitude,
+        originCoords.lng || location.longitude,
+        stop.latitude,
+        stop.longitude,
+        originCoords.label,
+        stop.name
       );
-      if (matched) {
-        handleSelectQuickStop(matched);
+    },
+    [originCoords, location.latitude, location.longitude, fetchRouteAlternatives]
+  );
+
+  // Address selection from BAN or Divia autocompletion
+  const handleSelectAddress = useCallback(
+    (address: GeocodedAddress, targetField: 'origin' | 'destination') => {
+      if (targetField === 'origin') {
+        setOriginText(address.label);
+        setOriginCoords({
+          lat: address.latitude,
+          lng: address.longitude,
+          label: address.label,
+        });
+      } else {
+        setDestinationText(address.label);
+        fetchRouteAlternatives(
+          originCoords.lat || location.latitude,
+          originCoords.lng || location.longitude,
+          address.latitude,
+          address.longitude,
+          originCoords.label,
+          address.label
+        );
       }
-    } else {
-      setAvailableRoutes([]);
-      setSelectedRoute(null);
-    }
-  };
+    },
+    [originCoords, location.latitude, location.longitude, fetchRouteAlternatives]
+  );
 
   const handleStartNavigation = () => {
     if (selectedRoute) {
@@ -119,10 +192,11 @@ export default function App() {
       <View style={styles.container}>
         <StatusBar style="light" />
 
-        {/* Fullscreen Map */}
+        {/* Fullscreen Map with Multi-Segments Route */}
         <TransitMap
           userLocation={location}
           reports={reports}
+          activeRoute={selectedRoute}
           onSelectReport={report => setActiveReportCard(report)}
           onOpenReportModal={() => setIsReportModalVisible(true)}
           onSelectStop={stop => handleSelectQuickStop(stop)}
@@ -134,13 +208,17 @@ export default function App() {
         {/* Search & Navigation Bar (when not in active trip) */}
         {!isNavigating && (
           <RouteSearchBar
+            originText={originText}
             destinationText={destinationText}
-            onDestinationChange={handleDestinationTextChange}
+            onOriginChange={setOriginText}
+            onDestinationChange={setDestinationText}
+            onSelectAddress={handleSelectAddress}
             onSelectQuickStop={handleSelectQuickStop}
             selectedRoute={selectedRoute}
             availableRoutes={availableRoutes}
             onSelectRoute={route => setSelectedRoute(route)}
             onStartNavigation={handleStartNavigation}
+            isLoadingRoutes={isLoadingRoutes}
           />
         )}
 
