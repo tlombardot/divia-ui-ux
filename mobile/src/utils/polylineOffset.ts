@@ -121,12 +121,14 @@ function compareLinesPriority(a: TransitLine, b: TransitLine): number {
 /**
  * Compute parallel corridor offsets for all visible transit lines.
  * Any vertex where 2+ visible lines pass within `proximityThresholdMeters` (default 15m)
- * receives a symmetric perpendicular shift (e.g. -5m / +5m for 2 lines, -10m / 0m / +10m for 3).
+ * receives a subtle perpendicular shift clamped to ±maxOffsetMeters (default ±2.5m)
+ * so T1 and T2 stay tightly aligned on Dijon's real tram tracks without spilling onto buildings.
  */
 export function computeCorridorOffsets(
   visibleLines: TransitLine[],
   proximityThresholdMeters: number = 15,
-  spacingMeters: number = 10
+  spacingMeters: number = 5,
+  maxOffsetMeters: number = 2.5
 ): OffsetLineResult[] {
   const sortedLines = [...visibleLines].sort(compareLinesPriority);
 
@@ -147,8 +149,8 @@ export function computeCorridorOffsets(
 
       hasCorridorOverlap = true;
       const slotIndex = corridorGroup.findIndex(item => item.id === line.id);
-      const centeredOffsetMeters =
-        (slotIndex - (corridorGroup.length - 1) / 2) * spacingMeters;
+      const rawOffset = (slotIndex - (corridorGroup.length - 1) / 2) * spacingMeters;
+      const clampedOffset = Math.max(-maxOffsetMeters, Math.min(maxOffsetMeters, rawOffset));
 
       const prev = idx > 0 ? pts[idx - 1] : pt;
       const next = idx < pts.length - 1 ? pts[idx + 1] : pt;
@@ -156,7 +158,7 @@ export function computeCorridorOffsets(
         pt,
         prev,
         next,
-        centeredOffsetMeters
+        clampedOffset
       );
 
       return { latitude: lat, longitude: lon };

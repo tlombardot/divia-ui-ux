@@ -43,9 +43,9 @@ describe('Parallel Corridor Polyline Offset Algorithm', () => {
     expect(results[0].coordinates[0].longitude).toBeCloseTo(t1Only[0].polyline[0][1], 7);
   });
 
-  it('separates overlapping T1 and T2 lines side-by-side on their shared Dijon trunk corridor', () => {
+  it('separates overlapping T1 and T2 lines cleanly with fine ±2.5m max offset on their shared Dijon trunk corridor', () => {
     const trams = DIJON_LINES.filter(l => l.id === 'T1' || l.id === 'T2');
-    const results = computeCorridorOffsets(trams, 15, 10);
+    const results = computeCorridorOffsets(trams, 15, 5, 2.5);
 
     const t1Res = results.find(r => r.line.id === 'T1')!;
     const t2Res = results.find(r => r.line.id === 'T2')!;
@@ -53,23 +53,42 @@ describe('Parallel Corridor Polyline Offset Algorithm', () => {
     expect(t1Res.hasCorridorOverlap).toBe(true);
     expect(t2Res.hasCorridorOverlap).toBe(true);
 
-    // Compare shifted Darcy vertex on T1 vs Darcy vertex on T2 (even though T1 & T2 run opposite directions!)
-    const t1DarcyIdx = t1Res.line.stops.findIndex(s => s.id === HUB_DARCY.id);
-    const t2DarcyIdx = t2Res.line.stops.findIndex(s => s.id === HUB_DARCY.id);
+    // Find Darcy point in each polyline
+    const t1DarcyIdx = t1Res.line.polyline.findIndex(
+      ([lat, lon]) => calculateDistanceMeters(lat, lon, HUB_DARCY.latitude, HUB_DARCY.longitude) < 5
+    );
+    const t2DarcyIdx = t2Res.line.polyline.findIndex(
+      ([lat, lon]) => calculateDistanceMeters(lat, lon, HUB_DARCY.latitude, HUB_DARCY.longitude) < 5
+    );
 
     const t1DarcyPt = t1Res.coordinates[t1DarcyIdx];
     const t2DarcyPt = t2Res.coordinates[t2DarcyIdx];
 
+    // Each tram stays within <= 3m of the actual rail center (never spilling into buildings)
+    const t1ShiftFromRail = calculateDistanceMeters(
+      t1DarcyPt.latitude,
+      t1DarcyPt.longitude,
+      HUB_DARCY.latitude,
+      HUB_DARCY.longitude
+    );
+    const t2ShiftFromRail = calculateDistanceMeters(
+      t2DarcyPt.latitude,
+      t2DarcyPt.longitude,
+      HUB_DARCY.latitude,
+      HUB_DARCY.longitude
+    );
+    expect(t1ShiftFromRail).toBeLessThanOrEqual(3);
+    expect(t2ShiftFromRail).toBeLessThanOrEqual(3);
+
+    // Total separation between T1 (-2.5m) and T2 (+2.5m) is ~5m
     const separationMeters = calculateDistanceMeters(
       t1DarcyPt.latitude,
       t1DarcyPt.longitude,
       t2DarcyPt.latitude,
       t2DarcyPt.longitude
     );
-
-    // Expected ~10m perpendicular separation (-5m vs +5m)
-    expect(separationMeters).toBeGreaterThanOrEqual(7);
-    expect(separationMeters).toBeLessThanOrEqual(13);
+    expect(separationMeters).toBeGreaterThanOrEqual(3);
+    expect(separationMeters).toBeLessThanOrEqual(7);
   });
 });
 

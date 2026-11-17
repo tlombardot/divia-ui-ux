@@ -74,9 +74,9 @@ export const TransitMap: React.FC<TransitMapProps> = ({
     return networkLines.filter(l => visibleLineIds.includes(l.id));
   }, [networkLines, visibleLineIds]);
 
-  // Compute parallel corridor offsets so overlapping lines sit cleanly side-by-side
+  // Compute subtle parallel corridor offsets (±2.5m max) so T1 & T2 stay tightly on real tracks
   const offsetLines = useMemo(
-    () => computeCorridorOffsets(filteredLines, 15, 10),
+    () => computeCorridorOffsets(filteredLines, 15, 5, 2.5),
     [filteredLines]
   );
 
@@ -251,6 +251,28 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                       </View>
                     </Marker>
                   )}
+                  {/* Intermediate stops aligned directly on the sliced track */}
+                  {segment.passedStops &&
+                    segment.passedStops.slice(1, -1).map(interStop => (
+                      <Marker
+                        key={`inter-${idx}-${interStop.id}`}
+                        coordinate={{
+                          latitude: interStop.latitude,
+                          longitude: interStop.longitude,
+                        }}
+                        title={interStop.name}
+                        anchor={{ x: 0.5, y: 0.5 }}
+                        tracksViewChanges={false}
+                        zIndex={58}
+                      >
+                        <View
+                          style={[
+                            styles.routeIntermediateDot,
+                            { borderColor: segColor },
+                          ]}
+                        />
+                      </Marker>
+                    ))}
                   {segment.toStop && (
                     <Marker
                       coordinate={{
@@ -558,6 +580,13 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: '#FFFFFF',
     borderWidth: 4,
+  },
+  routeIntermediateDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2.5,
   },
   destPinOuter: {
     width: 22,

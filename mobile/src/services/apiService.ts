@@ -58,7 +58,7 @@ export class ApiService {
     }
   }
 
-  public async fetchNetworkShapes(): Promise<TransitLine[]> {
+  public async fetchNetworkShapes(): Promise<{ version: number; lines: TransitLine[] } | null> {
     try {
       const response = await fetch(`${this.baseUrl}/api/network/shapes`, {
         headers: { Accept: 'application/json' },
@@ -68,11 +68,15 @@ export class ApiService {
         throw new Error(`Erreur réseau (${response.status})`);
       }
 
-      const data = (await response.json()) as { lines: TransitLine[] };
-      return data.lines || [];
+      const data = (await response.json()) as { version?: number; lines: TransitLine[] };
+      if (!data.lines || data.lines.length === 0) return null;
+      return {
+        version: data.version ?? 1,
+        lines: data.lines,
+      };
     } catch (error) {
       console.warn('[ApiService] fetchNetworkShapes fallback:', error);
-      return [];
+      return null;
     }
   }
 
