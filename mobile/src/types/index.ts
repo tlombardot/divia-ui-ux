@@ -131,11 +131,32 @@ export interface SavedNavigationState {
   navState?: string;
 }
 
+export interface PlaceSuggestion {
+  placeId: string;
+  label: string;
+  secondaryText: string;
+  type: 'address' | 'stop' | 'poi';
+  latitude?: number;
+  longitude?: number;
+  source: 'google_places' | 'divia_local' | 'ban_fallback';
+}
+
+export interface PlaceDetailsResult {
+  placeId: string;
+  label: string;
+  formattedAddress: string;
+  latitude: number;
+  longitude: number;
+  type: 'address' | 'stop' | 'poi';
+}
+
 export interface GeocodedAddress {
   id: string;
+  placeId?: string;
   label: string;
   context: string;
   latitude: number;
   longitude: number;
   type: 'address' | 'stop' | 'poi';
+  needsDetails?: boolean;
 }

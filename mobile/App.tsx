@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MapView from 'react-native-maps';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { LineFilterSheet } from './src/components/map/LineFilterSheet';
 import { TransitMap } from './src/components/map/TransitMap';
 import { ActiveTripBottomSheet } from './src/components/navigation/ActiveTripBottomSheet';
 import { ReportBottomSheet } from './src/components/reports/ReportBottomSheet';
@@ -21,14 +20,12 @@ import {
   ThreeStateBottomSheet,
 } from './src/components/sheet/ThreeStateBottomSheet';
 import { useFavoriteStations } from './src/hooks/useFavoriteStations';
-import { useLineFilter } from './src/hooks/useLineFilter';
 import { useLiveNavigation } from './src/hooks/useLiveNavigation';
 import { useLocation } from './src/hooks/useLocation';
-import { useNetworkShapes } from './src/hooks/useNetworkShapes';
 import { useReports } from './src/hooks/useReports';
 import { apiService } from './src/services/apiService';
 import { COLORS } from './src/theme/colors';
-import { GeocodedAddress, Report, RouteOption, TransitLine, TransitStop } from './src/types';
+import { GeocodedAddress, Report, RouteOption, TransitStop } from './src/types';
 
 type UiScreenMode = 'explore' | 'station' | 'directions' | 'timeline';
 
@@ -44,14 +41,6 @@ export default function App() {
   const { location, isDemoMode, refreshLocation } = useLocation();
   const { reports, controllerReports, createReport, voteReport } = useReports();
   const { favoriteIds, favoriteStops, isFavorite, toggleFavorite } = useFavoriteStations(location);
-  const { lines: networkLines } = useNetworkShapes();
-  const {
-    visibleLineIds,
-    totalLinesCount,
-    toggleLine,
-    ensureLineVisible,
-    applyPreset,
-  } = useLineFilter(networkLines);
   const {
     activeRoute,
     navState,
@@ -91,7 +80,6 @@ export default function App() {
 
   const [activeReportCard, setActiveReportCard] = useState<Report | null>(null);
   const [isReportModalVisible, setIsReportModalVisible] = useState<boolean>(false);
-  const [isLineFilterVisible, setIsLineFilterVisible] = useState<boolean>(false);
   const [reportTargetStop, setReportTargetStop] = useState<TransitStop | null>(null);
   const [dismissedAlertId, setDismissedAlertId] = useState<string | null>(null);
 
@@ -296,26 +284,6 @@ export default function App() {
     }
   }, [effectiveUserLocation.latitude, effectiveUserLocation.longitude]);
 
-  // "Centrer sur la ligne" from LineFilterSheet
-  const handleFocusLine = useCallback(
-    (line: TransitLine) => {
-      ensureLineVisible(line.id);
-      setIsLineFilterVisible(false);
-      if (mapRef.current && line.polyline.length >= 2) {
-        const coords = line.polyline.map(([latitude, longitude]) => ({
-          latitude,
-          longitude,
-        }));
-        mapRef.current.fitToCoordinates(coords, {
-          edgePadding: { top: 150, right: 45, bottom: 260, left: 45 },
-          animated: true,
-        });
-        setIsFollowingUser(false);
-      }
-    },
-    [ensureLineVisible]
-  );
-
   // Live Waze Controller Alert during active navigation
   const liveControllerAlert = useMemo(() => {
     if (!isNavigating || !activeRoute) return null;
@@ -354,8 +322,6 @@ export default function App() {
           mapRef={mapRef}
           userLocation={effectiveUserLocation}
           reports={reports}
-          networkLines={networkLines}
-          visibleLineIds={visibleLineIds}
           favoriteStopIds={favoriteIds}
           activeRoute={isNavigating ? activeRoute : selectedRoute}
           selectedStopId={selectedStop?.id}
@@ -377,9 +343,6 @@ export default function App() {
         {!isNavigating && (uiMode === 'explore' || uiMode === 'station') && (
           <FloatingSearchHeader
             onOpenSearch={handleOpenSearch}
-            onOpenLineFilter={() => setIsLineFilterVisible(true)}
-            visibleLinesCount={visibleLineIds.length}
-            totalLinesCount={totalLinesCount}
             onSelectQuickStop={handleRouteToStop}
             showControllersOnly={showControllersOnly}
             onToggleControllersFilter={() => setShowControllersOnly(prev => !prev)}
@@ -528,18 +491,6 @@ export default function App() {
             setReportTargetStop(null);
           }}
           onSubmitReport={createReport}
-        />
-
-        {/* Interactive Divia Line Filter Sheet */}
-        <LineFilterSheet
-          visible={isLineFilterVisible}
-          lines={networkLines}
-          visibleLineIds={visibleLineIds}
-          controllerReports={controllerReports}
-          onClose={() => setIsLineFilterVisible(false)}
-          onToggleLine={toggleLine}
-          onApplyPreset={applyPreset}
-          onFocusLine={handleFocusLine}
         />
       </View>
     </SafeAreaProvider>

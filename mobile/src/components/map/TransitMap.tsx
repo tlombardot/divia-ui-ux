@@ -1,17 +1,14 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
-import { ALL_DIJON_STOPS, DIJON_LINES, getLineColor } from '../../data/dijonNetwork';
+import { ALL_DIJON_STOPS, getLineColor } from '../../data/dijonNetwork';
 import { COLORS } from '../../theme/colors';
-import { Report, RouteOption, TransitLine, TransitStop, UserLocation } from '../../types';
+import { Report, RouteOption, TransitStop, UserLocation } from '../../types';
 import { getCrowdBadgeTheme } from '../../utils/crowdUtils';
-import { computeCorridorOffsets } from '../../utils/polylineOffset';
 
 interface TransitMapProps {
   userLocation: UserLocation;
   reports: Report[];
-  networkLines?: TransitLine[];
-  visibleLineIds?: string[];
   favoriteStopIds?: string[];
   activeRoute?: RouteOption | null;
   selectedStopId?: string | null;
@@ -27,33 +24,9 @@ interface TransitMapProps {
   mapRef?: React.RefObject<MapView | null>;
 }
 
-function getLineStrokeStyle(line: TransitLine, dimmed: boolean) {
-  if (line.category === 'TRAM') {
-    return {
-      strokeWidth: dimmed ? 3.2 : 5.5,
-      zIndex: 30,
-      lineDashPattern: undefined as number[] | undefined,
-    };
-  }
-  if (line.category === 'LIANE') {
-    return {
-      strokeWidth: dimmed ? 2.4 : 3.8,
-      zIndex: 20,
-      lineDashPattern: undefined as number[] | undefined,
-    };
-  }
-  return {
-    strokeWidth: dimmed ? 1.8 : 2.6,
-    zIndex: 10,
-    lineDashPattern: [8, 5] as number[],
-  };
-}
-
 export const TransitMap: React.FC<TransitMapProps> = ({
   userLocation,
   reports,
-  networkLines = DIJON_LINES,
-  visibleLineIds,
   favoriteStopIds = [],
   activeRoute,
   selectedStopId,
@@ -68,36 +41,36 @@ export const TransitMap: React.FC<TransitMapProps> = ({
   onMapPanDrag,
   mapRef,
 }) => {
-  // Filter visible lines
-  const filteredLines = useMemo(() => {
-    if (!visibleLineIds) return networkLines;
-    return networkLines.filter(l => visibleLineIds.includes(l.id));
-  }, [networkLines, visibleLineIds]);
-
-  // Compute subtle parallel corridor offsets (±2.5m max) so T1 & T2 stay tightly on real tracks
-  const offsetLines = useMemo(
-    () => computeCorridorOffsets(filteredLines, 15, 5, 2.5),
-    [filteredLines]
-  );
-
-  // Filter visible stops (always keep favorite stops & active route stops visible)
-  const visibleStops = useMemo(() => {
-    if (!visibleLineIds) return ALL_DIJON_STOPS;
-    const activeSet = new Set(visibleLineIds);
-    const favSet = new Set(favoriteStopIds);
-
-    return ALL_DIJON_STOPS.filter(stop => {
-      if (favSet.has(stop.id) || stop.id === selectedStopId) return true;
-      return stop.lines.some(lineId => activeSet.has(lineId));
-    });
-  }, [visibleLineIds, favoriteStopIds, selectedStopId]);
-
   const activeControllerReports = useMemo(
     () => reports.filter(r => r.status === 'active' && (r.type === 'CONTROLLER' || !r.type)),
     [reports]
   );
 
-  const dimmed = Boolean(activeRoute || showControllersOnly);
+  // Active community crowd reports indexed by stopId
+  const activeCrowdByStop = useMemo(() => {
+    const map = new Map<string, Report>();
+    for (const rep of reports) {
+      if (rep.status === 'active' && rep.type === 'CROWD' && rep.crowdLevel) {
+        const prev = map.get(rep.stopId);
+        if (!prev || rep.reportedAt > prev.reportedAt) {
+          map.set(rep.stopId, rep);
+        }
+      }
+    }
+    return map;
+  }, [reports]);
+
+  // Keep native map clean: display ONLY interactive DiviAkhaaa stops
+  // (Favorite stations ★, stations with live community crowd reports, or currently selected stop)
+  const highlightedStops = useMemo(() => {
+    const favSet = new Set(favoriteStopIds);
+    return ALL_DIJON_STOPS.filter(
+      stop =>
+        favSet.has(stop.id) ||
+        activeCrowdByStop.has(stop.id) ||
+        stop.id === selectedStopId
+    );
+  }, [favoriteStopIds, activeCrowdByStop, selectedStopId]);
 
   return (
     <View style={styles.container}>
@@ -107,82 +80,16 @@ export const TransitMap: React.FC<TransitMapProps> = ({
         initialRegion={{
           latitude: userLocation.latitude,
           longitude: userLocation.longitude,
-          latitudeDelta: 0.038,
-          longitudeDelta: 0.038,
+          latitudeDelta: 0.036,
+          longitudeDelta: 0.036,
         }}
         showsUserLocation={!userLocation.isDemoMode}
         showsMyLocationButton={false}
         showsCompass={false}
+        showsTraffic={false}
         onPanDrag={onMapPanDrag}
       >
-        {/* Divia Network Lines with Parallel Corridor Offsets & Visual Hierarchy */}
-        {offsetLines.map(({ line, coordinates }) => {
-          if (coordinates.length < 2) return null;
-          const styleCfg = getLineStrokeStyle(line, dimmed);
-
-          return (
-            <Polyline
-              key={`network-${line.id}`}
-              coordinates={coordinates}
-              strokeColor={dimmed ? `${line.color}40` : line.color}
-              strokeWidth={styleCfg.strokeWidth}
-              zIndex={styleCfg.zIndex}
-              lineDashPattern={styleCfg.lineDashPattern}
-              lineCap="round"
-              lineJoin="round"
-            />
-          );
-        })}
-
-        {/* Route Terminus & Key-Point Pill Badges on Map (when not in active navigation/filter clutter) */}
-        {!activeRoute &&
-          !showControllersOnly &&
-          offsetLines.map(({ line, coordinates }) => {
-            if (coordinates.length < 2) return null;
-            const startPt = coordinates[0];
-            const endPt = coordinates[coordinates.length - 1];
-            const isTram = line.category === 'TRAM';
-
-            return (
-              <React.Fragment key={`badges-${line.id}`}>
-                <Marker
-                  coordinate={startPt}
-                  anchor={{ x: 0.5, y: 0.5 }}
-                  tracksViewChanges={false}
-                  zIndex={isTram ? 35 : 22}
-                >
-                  <View
-                    style={[
-                      styles.lineRouteBadge,
-                      isTram && styles.lineRouteBadgeTram,
-                      { backgroundColor: line.color },
-                    ]}
-                  >
-                    <Text style={styles.lineRouteBadgeText}>{line.id}</Text>
-                  </View>
-                </Marker>
-
-                <Marker
-                  coordinate={endPt}
-                  anchor={{ x: 0.5, y: 0.5 }}
-                  tracksViewChanges={false}
-                  zIndex={isTram ? 35 : 22}
-                >
-                  <View
-                    style={[
-                      styles.lineRouteBadge,
-                      isTram && styles.lineRouteBadgeTram,
-                      { backgroundColor: line.color },
-                    ]}
-                  >
-                    <Text style={styles.lineRouteBadgeText}>{line.id}</Text>
-                  </View>
-                </Marker>
-              </React.Fragment>
-            );
-          })}
-
-        {/* Active Door-to-Door Route Segments (Always highest zIndex) */}
+        {/* Exact Door-to-Door Google Routes API (TRANSIT + WALK) Polylines */}
         {activeRoute && activeRoute.segments && (
           <>
             {activeRoute.segments.map((segment, idx) => {
@@ -210,19 +117,29 @@ export const TransitMap: React.FC<TransitMapProps> = ({
               const segColor =
                 segment.lineColor || getLineColor(segment.lineId || 'T1');
               return (
-                <Polyline
-                  key={`seg-${idx}-transit`}
-                  coordinates={coords}
-                  strokeColor={segColor}
-                  strokeWidth={6.5}
-                  lineCap="round"
-                  lineJoin="round"
-                  zIndex={55}
-                />
+                <React.Fragment key={`seg-${idx}-transit`}>
+                  {/* White halo casing so Google Transit routes pop cleanly over map streets */}
+                  <Polyline
+                    coordinates={coords}
+                    strokeColor="#FFFFFF"
+                    strokeWidth={9.5}
+                    lineCap="round"
+                    lineJoin="round"
+                    zIndex={53}
+                  />
+                  <Polyline
+                    coordinates={coords}
+                    strokeColor={segColor}
+                    strokeWidth={6.5}
+                    lineCap="round"
+                    lineJoin="round"
+                    zIndex={55}
+                  />
+                </React.Fragment>
               );
             })}
 
-            {/* Boarding / Alighting / Destination Markers */}
+            {/* Boarding / Intermediate / Transfer / Alighting Markers */}
             {activeRoute.segments.map((segment, idx) => {
               if (segment.type !== 'TRANSIT') return null;
               const segColor =
@@ -237,9 +154,13 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                         longitude: segment.fromStop.longitude,
                       }}
                       title={`Monter : ${segment.fromStop.name}`}
-                      description={`Ligne ${segment.lineId}`}
+                      description={
+                        segment.direction
+                          ? `${segment.lineId} · ${segment.direction}`
+                          : `Ligne ${segment.lineId}`
+                      }
                       anchor={{ x: 0.5, y: 0.5 }}
-                      zIndex={60}
+                      zIndex={62}
                     >
                       <View
                         style={[
@@ -247,11 +168,13 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                           { backgroundColor: segColor },
                         ]}
                       >
-                        <Text style={styles.routePinText}>{segment.lineId}</Text>
+                        <Text style={styles.routePinText}>
+                          {segment.lineId || 'DIVIA'}
+                        </Text>
                       </View>
                     </Marker>
                   )}
-                  {/* Intermediate stops aligned directly on the sliced track */}
+
                   {segment.passedStops &&
                     segment.passedStops.slice(1, -1).map(interStop => (
                       <Marker
@@ -273,6 +196,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                         />
                       </Marker>
                     ))}
+
                   {segment.toStop && (
                     <Marker
                       coordinate={{
@@ -281,7 +205,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                       }}
                       title={`Descendre : ${segment.toStop.name}`}
                       anchor={{ x: 0.5, y: 0.5 }}
-                      zIndex={60}
+                      zIndex={62}
                     >
                       <View
                         style={[
@@ -305,7 +229,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                     activeRoute.fullPolyline[activeRoute.fullPolyline.length - 1][1],
                 }}
                 title="Destination"
-                zIndex={65}
+                zIndex={68}
               >
                 <View style={styles.destPinOuter}>
                   <View style={styles.destPinInner} />
@@ -315,7 +239,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
           </>
         )}
 
-        {/* User Position Marker (always shown in Demo Mode or simulation) */}
+        {/* User Position Marker (in Demo Mode or active simulation) */}
         {userLocation.isDemoMode && (
           <Marker
             coordinate={{
@@ -324,7 +248,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
             }}
             title="Votre position"
             anchor={{ x: 0.5, y: 0.5 }}
-            zIndex={70}
+            zIndex={72}
           >
             <View style={styles.userMarkerOuter}>
               <View style={styles.userMarkerInner} />
@@ -332,70 +256,73 @@ export const TransitMap: React.FC<TransitMapProps> = ({
           </Marker>
         )}
 
-        {/* Clickable Stations (Tram double ring vs Bus compact dot + Crowd Ring + Favorite Star) */}
+        {/* Interactive DiviAkhaaa Stations ONLY: Favorites (★), Live Crowd Reports, or Selected */}
         {!showControllersOnly &&
-          visibleStops.map(stop => {
+          highlightedStops.map(stop => {
             const isSelected = stop.id === selectedStopId;
-            const isTramStop = stop.lines.includes('T1') || stop.lines.includes('T2');
             const isFav = favoriteStopIds.includes(stop.id);
-            const tramColor = stop.lines.includes('T1') ? '#E11535' : '#4B2982';
-
-            const crowdRep = reports.find(
-              r => r.type === 'CROWD' && r.status === 'active' && r.stopId === stop.id && r.crowdLevel
-            );
-            const crowdColor = crowdRep?.crowdLevel
-              ? getCrowdBadgeTheme(crowdRep.crowdLevel).color
+            const crowdRep = activeCrowdByStop.get(stop.id);
+            const crowdTheme = crowdRep?.crowdLevel
+              ? getCrowdBadgeTheme(crowdRep.crowdLevel)
               : null;
 
             return (
               <Marker
-                key={stop.id}
+                key={`stop-${stop.id}`}
                 coordinate={{
                   latitude: stop.latitude,
                   longitude: stop.longitude,
                 }}
                 anchor={{ x: 0.5, y: 0.5 }}
-                zIndex={isSelected ? 50 : isTramStop ? 32 : 18}
+                zIndex={isSelected ? 52 : crowdTheme ? 45 : 42}
                 onPress={() => onSelectStop && onSelectStop(stop)}
               >
-                {isTramStop ? (
+                {isFav ? (
                   <View
                     style={[
-                      styles.tramStationOuter,
-                      { borderColor: crowdColor || tramColor },
-                      isSelected && styles.stopMarkerSelected,
+                      styles.favoritePin,
+                      crowdTheme && { borderColor: crowdTheme.color },
+                      isSelected && styles.pinSelectedRing,
+                    ]}
+                  >
+                    <Text style={styles.favoriteStar}>★</Text>
+                  </View>
+                ) : crowdTheme ? (
+                  <View
+                    style={[
+                      styles.crowdPin,
+                      {
+                        backgroundColor: crowdTheme.bgColor,
+                        borderColor: crowdTheme.color,
+                      },
+                      isSelected && styles.pinSelectedRing,
                     ]}
                   >
                     <View
                       style={[
-                        styles.tramStationInner,
-                        { backgroundColor: isFav ? '#D97706' : crowdColor || tramColor },
+                        styles.crowdDot,
+                        { backgroundColor: crowdTheme.color },
                       ]}
                     />
+                    <Text
+                      style={[
+                        styles.crowdPinLabel,
+                        { color: crowdTheme.color },
+                      ]}
+                    >
+                      {crowdTheme.label}
+                    </Text>
                   </View>
                 ) : (
-                  <View
-                    style={[
-                      styles.busStopMarker,
-                      crowdColor ? { borderColor: crowdColor, borderWidth: 2.5 } : null,
-                      isFav ? { borderColor: '#D97706', borderWidth: 2.5 } : null,
-                      isSelected && styles.stopMarkerSelected,
-                    ]}
-                  >
-                    <View
-                      style={[
-                        styles.stopMarkerCenter,
-                        crowdColor ? { backgroundColor: crowdColor } : null,
-                        isSelected && styles.stopMarkerCenterSelected,
-                      ]}
-                    />
+                  <View style={styles.selectedStopPin}>
+                    <View style={styles.selectedStopPinCore} />
                   </View>
                 )}
               </Marker>
             );
           })}
 
-        {/* Active Controller Reports Markers (Waze) */}
+        {/* Active Waze Controller Reports Markers (🚨) */}
         {activeControllerReports.map(report => (
           <Marker
             key={report.id}
@@ -476,28 +403,6 @@ const styles = StyleSheet.create({
   map: {
     ...StyleSheet.absoluteFill,
   },
-  lineRouteBadge: {
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-    borderRadius: 6,
-    borderWidth: 1.5,
-    borderColor: '#FFFFFF',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.25,
-    shadowRadius: 2,
-    elevation: 3,
-  },
-  lineRouteBadgeTram: {
-    paddingHorizontal: 6,
-    paddingVertical: 2.5,
-    borderRadius: 7,
-  },
-  lineRouteBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 9,
-    fontWeight: '900',
-  },
   userMarkerOuter: {
     width: 28,
     height: 28,
@@ -514,60 +419,87 @@ const styles = StyleSheet.create({
     borderWidth: 2.5,
     borderColor: '#FFFFFF',
   },
-  tramStationOuter: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 3,
+  favoritePin: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#FFFBEB',
+    borderWidth: 2.5,
+    borderColor: '#D97706',
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.22,
-    shadowRadius: 2,
-    elevation: 2,
+    shadowRadius: 3,
+    elevation: 4,
   },
-  tramStationInner: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
+  favoriteStar: {
+    color: '#D97706',
+    fontSize: 14,
+    fontWeight: '900',
+    marginTop: -1,
   },
-  busStopMarker: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 2,
-    borderColor: '#5F6368',
-    justifyContent: 'center',
+  crowdPin: {
+    flexDirection: 'row',
     alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    gap: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 3,
   },
-  stopMarkerSelected: {
+  crowdDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+  },
+  crowdPinLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  selectedStopPin: {
     width: 22,
     height: 22,
     borderRadius: 11,
+    backgroundColor: '#FFFFFF',
     borderWidth: 3.5,
     borderColor: COLORS.cassis,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    elevation: 4,
   },
-  stopMarkerCenter: {
-    width: 3,
-    height: 3,
-    borderRadius: 1.5,
-    backgroundColor: '#5F6368',
-  },
-  stopMarkerCenterSelected: {
+  selectedStopPinCore: {
     width: 6,
     height: 6,
     borderRadius: 3,
     backgroundColor: COLORS.cassis,
   },
+  pinSelectedRing: {
+    borderWidth: 3,
+    borderColor: COLORS.cassis,
+    transform: [{ scale: 1.12 }],
+  },
   routeBoardingPin: {
-    paddingHorizontal: 6,
+    paddingHorizontal: 7,
     paddingVertical: 3,
-    borderRadius: 8,
+    borderRadius: 9,
     borderWidth: 2,
     borderColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    elevation: 4,
   },
   routePinText: {
     color: '#FFFFFF',

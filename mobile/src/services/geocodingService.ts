@@ -1,5 +1,6 @@
 import { ALL_DIJON_STOPS } from '../data/dijonNetwork';
 import { GeocodedAddress } from '../types';
+import { apiService } from './apiService';
 
 interface BANFeature {
   geometry: {
@@ -20,34 +21,53 @@ interface BANResponse {
 
 export class GeocodingService {
   /**
-   * Rechercher des adresses ou arrêts à Dijon (Base Adresse Nationale + Réseau Divia)
+   * Recherche d'adresses, commerces et arrêts à Dijon :
+   * 1. Proxy serveur Google Places API (New) (/api/places/autocomplete)
+   * 2. Repli automatique local Divia + Base Adresse Nationale (BAN) si hors-ligne
    */
   public async searchAddresses(query: string): Promise<GeocodedAddress[]> {
-    const trimmed = query.trim().toLowerCase();
+    const trimmed = query.trim();
     if (trimmed.length < 2) return [];
 
+    // 1. Proxy sécurisé serveur (Google Places API New biaisé sur Dijon)
+    const serverSuggestions = await apiService.fetchPlaceAutocomplete(trimmed);
+    if (serverSuggestions.length > 0) {
+      return serverSuggestions.map(s => ({
+        id: s.placeId,
+        placeId: s.placeId,
+        label: s.label,
+        context: s.secondaryText,
+        latitude: s.latitude ?? 0,
+        longitude: s.longitude ?? 0,
+        type: s.type,
+        needsDetails: s.latitude === undefined || s.longitude === undefined,
+      }));
+    }
+
+    // 2. Repli hors-ligne : arrêts Divia locaux + Base Adresse Nationale
+    const lower = trimmed.toLowerCase();
     const results: GeocodedAddress[] = [];
 
-    // 1. Recherche instantanée dans les arrêts du réseau Divia
     const matchedStops = ALL_DIJON_STOPS.filter(stop =>
-      stop.name.toLowerCase().includes(trimmed)
+      stop.name.toLowerCase().includes(lower)
     ).slice(0, 3);
 
     for (const stop of matchedStops) {
       results.push({
         id: `stop-${stop.id}`,
+        placeId: `divia-stop:${stop.id}`,
         label: stop.name,
         context: `Arrêt Divia (${stop.lines.join(', ')})`,
         latitude: stop.latitude,
         longitude: stop.longitude,
         type: 'stop',
+        needsDetails: false,
       });
     }
 
-    // 2. Recherche via l'API officielle Base Adresse Nationale (BAN) centrée sur Dijon
     try {
       const url = `https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(
-        trimmed
+        lower
       )}&lat=47.3220&lon=5.0415&limit=5`;
 
       const controller = new AbortController();
@@ -68,12 +88,12 @@ export class GeocodingService {
               latitude: lat,
               longitude: lon,
               type: 'address',
+              needsDetails: false,
             });
           }
         }
       }
     } catch {
-      // Si hors-ligne ou timeout, ajouter des POI majeurs de repli si la recherche correspond
       const mockPois = [
         { label: 'Gare SNCF de Dijon', context: 'Cour de la Gare, 21000 Dijon', lat: 47.3236, lon: 5.0278 },
         { label: 'Centre Commercial Toison d\'Or', context: 'Allée d\'Italie, 21000 Dijon', lat: 47.3541, lon: 5.0501 },
@@ -83,7 +103,7 @@ export class GeocodingService {
       ];
 
       for (const poi of mockPois) {
-        if (poi.label.toLowerCase().includes(trimmed) && !results.some(r => r.label === poi.label)) {
+        if (poi.label.toLowerCase().includes(lower) && !results.some(r => r.label === poi.label)) {
           results.push({
             id: `poi-${poi.lat}-${poi.lon}`,
             label: poi.label,
@@ -91,12 +111,43 @@ export class GeocodingService {
             latitude: poi.lat,
             longitude: poi.lon,
             type: 'poi',
+            needsDetails: false,
           });
         }
       }
     }
 
     return results;
+  }
+
+  /**
+   * Résout les coordonnées GPS exactes d'une suggestion Google Places via /api/places/details
+   */
+  public async resolveAddressCoordinates(
+    address: GeocodedAddress
+  ): Promise<GeocodedAddress | null> {
+    if (!address.needsDetails && (address.latitude !== 0 || address.longitude !== 0)) {
+      return address;
+    }
+
+    if (!address.placeId) {
+      return null;
+    }
+
+    const details = await apiService.fetchPlaceDetails(address.placeId);
+    if (!details) {
+      return null;
+    }
+
+    return {
+      ...address,
+      label: details.label || address.label,
+      context: details.formattedAddress || address.context,
+      latitude: details.latitude,
+      longitude: details.longitude,
+      type: details.type || address.type,
+      needsDetails: false,
+    };
   }
 }
 

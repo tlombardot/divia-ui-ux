@@ -59,13 +59,18 @@ export function useLiveNavigation() {
       // État 1 : Marche vers l'arrêt de montée (WALKING_TO_STOP)
       // =======================================================================
       if (navState === 'WALKING_TO_STOP') {
-        const boardingStop = currentSegment.toStop;
-        if (boardingStop) {
+        const nextSeg = segments[currentSegmentIndex + 1];
+        const boardingStop = currentSegment.toStop ?? nextSeg?.fromStop;
+        const lastWalkPt = currentSegment.polyline[currentSegment.polyline.length - 1];
+        const targetLat = boardingStop?.latitude ?? lastWalkPt?.[0];
+        const targetLon = boardingStop?.longitude ?? lastWalkPt?.[1];
+
+        if (targetLat !== undefined && targetLon !== undefined) {
           const dist = calculateDistanceMeters(
             coords.latitude,
             coords.longitude,
-            boardingStop.latitude,
-            boardingStop.longitude
+            targetLat,
+            targetLon
           );
           setDistanceToNextStep(dist);
 
@@ -77,20 +82,26 @@ export function useLiveNavigation() {
               // Ignore in environments without haptics
             }
 
-            // Bascule AUTOMATIQUE sur le segment transit suivant
             const nextIdx = currentSegmentIndex + 1;
-            setCurrentSegmentIndex(nextIdx);
-            setNavState('ON_TRANSIT');
-            setPassedStopsCount(0);
-            setAlightingWarning(null);
+            if (nextIdx < segments.length) {
+              const nextState: NavState =
+                segments[nextIdx].type === 'TRANSIT' ? 'ON_TRANSIT' : 'WALKING_TO_DEST';
+              setCurrentSegmentIndex(nextIdx);
+              setNavState(nextState);
+              setPassedStopsCount(0);
+              setAlightingWarning(null);
 
-            storageService.saveActiveNavigation({
-              activeRoute,
-              currentSegmentIndex: nextIdx,
-              currentStepIndex: nextIdx,
-              startedAt: Date.now(),
-              navState: 'ON_TRANSIT',
-            });
+              storageService.saveActiveNavigation({
+                activeRoute,
+                currentSegmentIndex: nextIdx,
+                currentStepIndex: nextIdx,
+                startedAt: Date.now(),
+                navState: nextState,
+              });
+            } else {
+              setNavState('ARRIVED');
+              storageService.clearActiveNavigation();
+            }
             return;
           }
         }
@@ -158,20 +169,28 @@ export function useLiveNavigation() {
 
             if (nextIdx < segments.length) {
               const nextSegment = segments[nextIdx];
+              const followingSegment = segments[nextIdx + 1];
               setCurrentSegmentIndex(nextIdx);
 
-              if (nextSegment.type === 'TRANSFER') {
-                setNavState('TRANSFER');
-              } else {
-                setNavState('WALKING_TO_DEST');
+              let nextState: NavState = 'WALKING_TO_DEST';
+              if (nextSegment.type === 'TRANSIT') {
+                nextState = 'ON_TRANSIT';
+                setPassedStopsCount(0);
+              } else if (
+                nextSegment.type === 'TRANSFER' ||
+                (nextSegment.type === 'WALK' && followingSegment?.type === 'TRANSIT')
+              ) {
+                nextState = 'TRANSFER';
               }
+
+              setNavState(nextState);
 
               storageService.saveActiveNavigation({
                 activeRoute,
                 currentSegmentIndex: nextIdx,
                 currentStepIndex: nextIdx,
                 startedAt: Date.now(),
-                navState: nextSegment.type === 'TRANSFER' ? 'TRANSFER' : 'WALKING_TO_DEST',
+                navState: nextState,
               });
             } else {
               setNavState('ARRIVED');
@@ -186,13 +205,18 @@ export function useLiveNavigation() {
       // État 3 : Correspondance quai à quai (TRANSFER)
       // =======================================================================
       if (navState === 'TRANSFER') {
-        const nextBoarding = currentSegment.toStop;
-        if (nextBoarding) {
+        const nextSeg = segments[currentSegmentIndex + 1];
+        const nextBoarding = currentSegment.toStop ?? nextSeg?.fromStop;
+        const lastTransferPt = currentSegment.polyline[currentSegment.polyline.length - 1];
+        const targetLat = nextBoarding?.latitude ?? lastTransferPt?.[0];
+        const targetLon = nextBoarding?.longitude ?? lastTransferPt?.[1];
+
+        if (targetLat !== undefined && targetLon !== undefined) {
           const dist = calculateDistanceMeters(
             coords.latitude,
             coords.longitude,
-            nextBoarding.latitude,
-            nextBoarding.longitude
+            targetLat,
+            targetLon
           );
           setDistanceToNextStep(dist);
 
@@ -329,8 +353,13 @@ export function useLiveNavigation() {
     setAlightingWarning(null);
 
     const firstSegment = route.segments[0];
+    const hasTransit = route.segments.some(s => s.type === 'TRANSIT');
     const initialNavState: NavState =
-      firstSegment?.type === 'TRANSIT' ? 'ON_TRANSIT' : 'WALKING_TO_STOP';
+      firstSegment?.type === 'TRANSIT'
+        ? 'ON_TRANSIT'
+        : hasTransit
+          ? 'WALKING_TO_STOP'
+          : 'WALKING_TO_DEST';
 
     setNavState(initialNavState);
 

@@ -42,6 +42,7 @@ export const DirectionsHeader: React.FC<DirectionsHeaderProps> = ({
   );
   const [results, setResults] = useState<GeocodedAddress[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [isResolvingPlace, setIsResolvingPlace] = useState(false);
 
   useEffect(() => {
     const query = focusedField === 'origin' ? originText : destinationText;
@@ -67,9 +68,20 @@ export const DirectionsHeader: React.FC<DirectionsHeaderProps> = ({
     };
   }, [originText, destinationText, focusedField]);
 
-  const handlePick = (item: GeocodedAddress) => {
-    if (!focusedField) return;
-    onSelectAddress(item, focusedField);
+  const handlePick = async (item: GeocodedAddress) => {
+    if (!focusedField || isResolvingPlace) return;
+    const targetField = focusedField;
+
+    if (item.needsDetails) {
+      setIsResolvingPlace(true);
+      const resolved = await geocodingService.resolveAddressCoordinates(item);
+      setIsResolvingPlace(false);
+      if (!resolved) return;
+      onSelectAddress(resolved, targetField);
+    } else {
+      onSelectAddress(item, targetField);
+    }
+
     setFocusedField(null);
     setResults([]);
   };
@@ -179,10 +191,14 @@ export const DirectionsHeader: React.FC<DirectionsHeaderProps> = ({
               </View>
             </TouchableOpacity>
 
-            {isSearching && (
+            {(isSearching || isResolvingPlace) && (
               <View style={styles.searchingRow}>
                 <ActivityIndicator size="small" color={COLORS.cassis} />
-                <Text style={styles.searchingText}>Recherche d'adresses à Dijon...</Text>
+                <Text style={styles.searchingText}>
+                  {isResolvingPlace
+                    ? 'Récupération de la position exacte...'
+                    : 'Recherche de lieux et adresses à Dijon...'}
+                </Text>
               </View>
             )}
 

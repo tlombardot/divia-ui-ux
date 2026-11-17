@@ -1,5 +1,13 @@
 import Constants from 'expo-constants';
-import { CrowdLevel, Report, ReportType, RouteOption, TransitLine } from '../types';
+import {
+  CrowdLevel,
+  PlaceDetailsResult,
+  PlaceSuggestion,
+  Report,
+  ReportType,
+  RouteOption,
+  TransitLine,
+} from '../types';
 
 /**
  * Hybrid connection resolver:
@@ -76,6 +84,54 @@ export class ApiService {
       };
     } catch (error) {
       console.warn('[ApiService] fetchNetworkShapes fallback:', error);
+      return null;
+    }
+  }
+
+  public async fetchPlaceAutocomplete(input: string): Promise<PlaceSuggestion[]> {
+    try {
+      const url = `${this.baseUrl}/api/places/autocomplete?input=${encodeURIComponent(input)}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: { Accept: 'application/json' },
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`Erreur Places autocomplete (${response.status})`);
+      }
+
+      const data = (await response.json()) as { suggestions?: PlaceSuggestion[] };
+      return data.suggestions || [];
+    } catch (error) {
+      console.warn('[ApiService] fetchPlaceAutocomplete fallback:', error);
+      return [];
+    }
+  }
+
+  public async fetchPlaceDetails(placeId: string): Promise<PlaceDetailsResult | null> {
+    try {
+      const url = `${this.baseUrl}/api/places/details?placeId=${encodeURIComponent(placeId)}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: { Accept: 'application/json' },
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`Erreur Place details (${response.status})`);
+      }
+
+      const data = (await response.json()) as { place?: PlaceDetailsResult };
+      return data.place || null;
+    } catch (error) {
+      console.warn('[ApiService] fetchPlaceDetails error:', error);
       return null;
     }
   }
