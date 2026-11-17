@@ -134,19 +134,31 @@ export const TransitMap: React.FC<TransitMapProps> = ({
   }, [reports]);
 
   // All clickable stations on visible/active lines + Favorites (★) + Crowd + Selected
+  // ALWAYS prioritize exact Google/snapped coordinates from `/api/network/shapes` (`networkLines`)!
   const visibleStops = useMemo(() => {
     const favSet = new Set(favoriteStopIds);
     const allStopsMap = new Map<string, TransitStop>();
-    for (const stop of ALL_DIJON_STOPS) {
-      allStopsMap.set(stop.id, stop);
-    }
+
+    // 1. Seed with exact snapped coordinates from server `/api/network/shapes`
     for (const line of networkLines) {
       for (const stop of line.stops) {
-        if (!allStopsMap.has(stop.id)) {
-          allStopsMap.set(stop.id, stop);
+        const existing = allStopsMap.get(stop.id);
+        if (!existing) {
+          allStopsMap.set(stop.id, { ...stop, lines: [...stop.lines] });
+        } else {
+          const mergedLines = Array.from(new Set([...existing.lines, ...stop.lines, line.id]));
+          existing.lines = mergedLines;
         }
       }
     }
+
+    // 2. Fallback for any local stop not yet in networkLines
+    for (const stop of ALL_DIJON_STOPS) {
+      if (!allStopsMap.has(stop.id)) {
+        allStopsMap.set(stop.id, stop);
+      }
+    }
+
     const allStops = Array.from(allStopsMap.values());
     if (!effectiveVisibleLineIds) return allStops;
 
@@ -336,6 +348,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                     activeRoute.fullPolyline[activeRoute.fullPolyline.length - 1][1],
                 }}
                 title="Destination"
+                anchor={{ x: 0.5, y: 0.5 }}
                 zIndex={68}
               >
                 <View style={styles.destPinOuter}>
@@ -493,7 +506,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
           );
         })}
 
-        {/* Active Waze Controller Reports Markers (🚨) at Live Estimated Position */}
+        {/* Active Waze Controller Reports Markers (🚨) Centered Directly on Line Polyline */}
         {trackedControllers.map(({ report, progression }) => {
           const lat = progression?.currentLatitude ?? report.latitude;
           const lng = progression?.currentLongitude ?? report.longitude;
@@ -501,6 +514,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
             <Marker
               key={report.id}
               coordinate={{ latitude: lat, longitude: lng }}
+              anchor={{ x: 0.5, y: 0.5 }}
               zIndex={82}
               onPress={() => onSelectReport(report)}
             >

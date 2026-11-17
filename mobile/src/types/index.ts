@@ -4,6 +4,8 @@ export interface TransitStop {
   latitude: number;
   longitude: number;
   lines: string[];
+  polylineVertexIndex?: number;
+  distanceAlongLineMeters?: number;
 }
 
 export type LineCategory = 'TRAM' | 'LIANE' | 'BUS';
@@ -101,6 +103,8 @@ export interface ControllerProgression {
   endStopIndex: number;
   currentLatitude: number;
   currentLongitude: number;
+  distanceAlongLineMeters?: number;
+  snappedToLine?: boolean;
   upcomingStops: UpcomingStopPrediction[];
   alertPolyline: [number, number][];
   estimatedTerminusAt: number;
@@ -162,6 +166,9 @@ export interface Report {
   downvotes: number;
   reliabilityScore: number;
   status: 'active' | 'expired' | 'dismissed';
+  snappedToLine?: boolean;
+  currentStationName?: string;
+  upcomingStops?: UpcomingStopPrediction[];
   progression?: ControllerProgression;
 }
 

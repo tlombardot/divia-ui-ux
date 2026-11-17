@@ -5,7 +5,7 @@ import { apiService } from '../services/apiService';
 import { TransitLine } from '../types';
 
 export const NETWORK_SHAPES_CACHE_KEY = '@diviakhaaa/network_shapes_cache';
-export const EXPECTED_NETWORK_SHAPES_VERSION = 4;
+export const EXPECTED_NETWORK_SHAPES_VERSION = 5;
 
 interface CachedShapesRecord {
   version: number;

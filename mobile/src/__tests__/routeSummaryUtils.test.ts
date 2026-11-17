@@ -77,9 +77,9 @@ describe('Route Summary Pills & Permanent Tram Line Configuration', () => {
     expect(pills[3].durationMinutes).toBe(2);
   });
 
-  it('keeps T1 and T2 enabled by default on the map and syncs shapes cache v4', () => {
+  it('keeps T1 and T2 enabled by default on the map and syncs shapes cache v5', () => {
     expect(DEFAULT_VISIBLE_LINE_IDS).toContain('T1');
     expect(DEFAULT_VISIBLE_LINE_IDS).toContain('T2');
-    expect(EXPECTED_NETWORK_SHAPES_VERSION).toBe(4);
+    expect(EXPECTED_NETWORK_SHAPES_VERSION).toBe(5);
   });
 });
