@@ -2,6 +2,7 @@ import { RouteSegment } from '../types';
 
 export interface SummaryPill {
   kind: 'WALK' | 'TRANSIT' | 'TRANSFER';
+  durationSeconds: number;
   durationMinutes: number;
   distanceMeters: number;
   lineId?: string;
@@ -10,7 +11,8 @@ export interface SummaryPill {
 
 /**
  * Pure helper: guarantees route summary cards NEVER display two consecutive
- * WALK pills (merges adjacent WALK segments defensively and drops < 20m transfers).
+ * WALK pills (merges adjacent WALK segments using exact seconds before rounding
+ * and drops < 20m same-platform transfers).
  */
 export function buildMergedSummaryPills(segments: RouteSegment[]): SummaryPill[] {
   const pills: SummaryPill[] = [];
@@ -23,6 +25,7 @@ export function buildMergedSummaryPills(segments: RouteSegment[]): SummaryPill[]
     if (seg.type === 'TRANSIT') {
       pills.push({
         kind: 'TRANSIT',
+        durationSeconds: seg.durationSeconds ?? seg.durationMinutes * 60,
         durationMinutes: seg.durationMinutes,
         distanceMeters: seg.distanceMeters,
         lineId: seg.lineId,
@@ -33,9 +36,11 @@ export function buildMergedSummaryPills(segments: RouteSegment[]): SummaryPill[]
 
     if (seg.type === 'TRANSFER') {
       if (seg.distanceMeters < 20) continue;
+      const sec = seg.durationSeconds ?? seg.durationMinutes * 60;
       pills.push({
         kind: 'TRANSFER',
-        durationMinutes: Math.max(1, seg.durationMinutes),
+        durationSeconds: sec,
+        durationMinutes: Math.max(1, Math.round(sec / 60)),
         distanceMeters: seg.distanceMeters,
       });
       continue;
@@ -46,20 +51,18 @@ export function buildMergedSummaryPills(segments: RouteSegment[]): SummaryPill[]
       continue;
     }
 
+    const curSec = seg.durationSeconds ?? seg.durationMinutes * 60;
     const lastPill = pills[pills.length - 1];
+
     if (lastPill && lastPill.kind === 'WALK') {
-      const prevSec = lastPill.durationMinutes * 60;
-      const curSec = seg.durationSeconds ?? seg.durationMinutes * 60;
+      lastPill.durationSeconds += curSec;
       lastPill.distanceMeters += seg.distanceMeters;
-      lastPill.durationMinutes = Math.max(1, Math.round((prevSec + curSec) / 60));
+      lastPill.durationMinutes = Math.max(1, Math.round(lastPill.durationSeconds / 60));
     } else {
-      const mins =
-        seg.durationSeconds !== undefined
-          ? Math.max(1, Math.round(seg.durationSeconds / 60))
-          : Math.max(1, seg.durationMinutes);
       pills.push({
         kind: 'WALK',
-        durationMinutes: mins,
+        durationSeconds: curSec,
+        durationMinutes: Math.max(1, Math.round(curSec / 60)),
         distanceMeters: seg.distanceMeters,
       });
     }
