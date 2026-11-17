@@ -178,7 +178,12 @@ export async function getPedestrianRoute(
     }
 
     const distanceMeters = Math.round(route.distance);
-    const durationMinutes = Math.max(1, Math.round(route.duration / 60));
+    // Compute realistic pedestrian duration from exact street distance (~4.5 km/h = 1.25 m/s)
+    // (Public router.project-osrm.org demo server reports car-speed duration even on /foot/)
+    const durationMinutes = Math.max(
+      1,
+      Math.round(distanceMeters / (WALKING_SPEED_MPS * 60))
+    );
 
     return {
       distanceMeters,

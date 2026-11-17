@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   calculateDistanceMeters,
   findNearestStop,
+  HUB_DARCY,
+  HUB_GARE,
+  HUB_GODRANS,
+  HUB_REPUBLIQUE,
+  HUB_UNIVERSITE,
 } from '../data/dijonNetwork';
 import { getPedestrianRoute } from '../services/pedestrianService';
 import {
@@ -9,6 +14,7 @@ import {
   getLineHeadwayMinutes,
   getNextDepartureEstimate,
 } from '../services/routingService';
+import { projectPointOntoPolyline } from '../utils/geometryTopology';
 
 describe('routingService — Door-to-Door & Anti-Detour Dijkstra', () => {
   it('calculates direct distance accurately with Haversine formula', () => {
@@ -120,5 +126,80 @@ describe('routingService — Door-to-Door & Anti-Detour Dijkstra', () => {
     const walkOption = routes.find(r => r.title.includes('100% à pied') || r.summary.includes('À pied direct'));
     expect(walkOption).toBeDefined();
     expect(walkOption?.transitDurationMinutes).toBe(0);
+  });
+
+  it('routes Gare SNCF -> République via pedestrian center (Godrans) along real T1 rails, never outer car roads', async () => {
+    const routes = await calculateRoutes({
+      fromLat: HUB_GARE.latitude,
+      fromLng: HUB_GARE.longitude,
+      fromLabel: 'Dijon Gare',
+      toLat: HUB_REPUBLIQUE.latitude,
+      toLng: HUB_REPUBLIQUE.longitude,
+      toLabel: 'République',
+    });
+
+    const t1Route = routes.find(r =>
+      r.segments.some(s => s.type === 'TRANSIT' && s.lineId === 'T1')
+    );
+    expect(t1Route).toBeDefined();
+
+    const t1Seg = t1Route!.segments.find(s => s.type === 'TRANSIT' && s.lineId === 'T1')!;
+    expect(t1Seg.polyline.length).toBeGreaterThanOrEqual(4);
+
+    // Must pass directly through Godrans Les Halles pedestrian tram zone (< 50 m)
+    const projGodrans = projectPointOntoPolyline(
+      [HUB_GODRANS.latitude, HUB_GODRANS.longitude],
+      t1Seg.polyline
+    );
+    expect(projGodrans.distanceMeters).toBeLessThan(50);
+  });
+
+  it('routes Darcy -> Université on T1 using sliced rail geometry and realistic 22 km/h duration', async () => {
+    const routes = await calculateRoutes({
+      fromLat: HUB_DARCY.latitude,
+      fromLng: HUB_DARCY.longitude,
+      fromLabel: 'Darcy',
+      toLat: HUB_UNIVERSITE.latitude,
+      toLng: HUB_UNIVERSITE.longitude,
+      toLabel: 'Université',
+    });
+
+    const t1Route = routes.find(r =>
+      r.segments.some(s => s.type === 'TRANSIT' && s.lineId === 'T1')
+    );
+    expect(t1Route).toBeDefined();
+
+    const t1Seg = t1Route!.segments.find(s => s.type === 'TRANSIT' && s.lineId === 'T1')!;
+    expect(t1Seg.direction).toContain('Quetigny');
+    expect(t1Seg.durationMinutes).toBeGreaterThanOrEqual(8);
+    expect(t1Seg.durationMinutes).toBeLessThanOrEqual(24);
+
+    // Confirm sliced rail polyline crosses Godrans Les Halles (< 50 m)
+    const projGodrans = projectPointOntoPolyline(
+      [HUB_GODRANS.latitude, HUB_GODRANS.longitude],
+      t1Seg.polyline
+    );
+    expect(projGodrans.distanceMeters).toBeLessThan(50);
+  });
+
+  it('enforces strict reverse directional order on République -> Dijon Gare (T1 Retour)', async () => {
+    const routes = await calculateRoutes({
+      fromLat: HUB_REPUBLIQUE.latitude,
+      fromLng: HUB_REPUBLIQUE.longitude,
+      fromLabel: 'République',
+      toLat: HUB_GARE.latitude,
+      toLng: HUB_GARE.longitude,
+      toLabel: 'Dijon Gare',
+    });
+
+    const t1Route = routes.find(r =>
+      r.segments.some(s => s.type === 'TRANSIT' && s.lineId === 'T1')
+    );
+    expect(t1Route).toBeDefined();
+
+    const t1Seg = t1Route!.segments.find(s => s.type === 'TRANSIT' && s.lineId === 'T1')!;
+    expect(t1Seg.direction).toContain('Dijon Gare');
+    expect(t1Seg.passedStops?.[0].id).toBe(HUB_REPUBLIQUE.id);
+    expect(t1Seg.passedStops?.[t1Seg.passedStops.length - 1].id).toBe(HUB_GARE.id);
   });
 });
