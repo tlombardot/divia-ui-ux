@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "DiviAkhaaa",
+    "slug": "diviakhaaa",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#821245"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.diviakhaaa.mobile",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "DiviAkhaaa utilise votre position pour calculer les meilleurs itinéraires sur le réseau Divia et détecter les arrêts à proximité."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#821245",
+        "foregroundImage": "./assets/android-icon-foreground.png"
+      },
+      "package": "com.diviakhaaa.mobile",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
+    }
+  }
+}
