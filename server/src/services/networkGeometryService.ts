@@ -13,6 +13,7 @@ import {
   snapStopToPolyline,
   stitchWays,
 } from '../utils/geometryTopology';
+import { fetchGoogleTransitLinePolyline } from './googleTransitService';
 
 export interface NetworkShapesCachePayload {
   version: number;
@@ -62,7 +63,7 @@ interface OSRMRouteResponse {
   }>;
 }
 
-export const NETWORK_CACHE_VERSION = 2;
+export const NETWORK_CACHE_VERSION = 3;
 const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
@@ -379,11 +380,47 @@ export class NetworkGeometryService {
   }
 
   /**
-   * Generate full topological network shapes & aligned stations
+   * Generate full topological network shapes & aligned stations:
+   * 1. Primary: Official Google Routes API v2 (TRANSIT) once per line (when API key is set)
+   * 2. Fallback: Overpass OSM tram rails / bus relations + guarded OSRM / densified rail waypoints
+   * Saved to server/data/network-shapes-cache.json so subsequent restarts consume 0 quota.
    */
   public async generateNetworkShapes(): Promise<NetworkShapesCachePayload> {
+    const googleLinesMap = new Map<string, LatLng[]>();
+    const hasGoogleKey = Boolean(
+      this.allowExternalFetch && process.env.GOOGLE_MAPS_API_KEY?.trim()
+    );
+
+    if (hasGoogleKey) {
+      await Promise.all(
+        DIJON_LINES.map(async line => {
+          const firstStop = line.stops[0];
+          const lastStop = line.stops[line.stops.length - 1];
+          if (!firstStop || !lastStop) return;
+
+          const googlePoly = await fetchGoogleTransitLinePolyline(
+            line.id,
+            { latitude: firstStop.latitude, longitude: firstStop.longitude },
+            { latitude: lastStop.latitude, longitude: lastStop.longitude },
+            line.category
+          );
+          if (googlePoly && googlePoly.length >= 6) {
+            googleLinesMap.set(line.id, sanitizeContinuousPolyline(googlePoly, 145));
+          }
+        })
+      );
+    }
+
+    const needsOsmFallback = googleLinesMap.size < DIJON_LINES.length;
     const { tramRelationsByRef, busRelationsByRef, tramRailWays, osmStops } =
-      await this.fetchOverpassDijonData();
+      needsOsmFallback
+        ? await this.fetchOverpassDijonData()
+        : {
+            tramRelationsByRef: new Map<string, LatLng[][][]>(),
+            busRelationsByRef: new Map<string, LatLng[][][]>(),
+            tramRailWays: [] as LatLng[][],
+            osmStops: [] as Array<{ name: string; lat: number; lon: number }>,
+          };
 
     const enrichedLines: TransitLine[] = [];
 
@@ -403,9 +440,17 @@ export class NetworkGeometryService {
       let shapeSource: ShapeSource = 'fallback';
 
       // =======================================================================
-      // 1. TRAMWAYS (T1, T2) — STRICTLY NO OSRM DRIVING! RAILS ONLY!
+      // 0. PRIMARY: Official Google Routes API v2 TRANSIT shape (cached once)
       // =======================================================================
-      if (line.category === 'TRAM') {
+      const googlePoly = googleLinesMap.get(line.id);
+      if (googlePoly && googlePoly.length >= 6) {
+        forwardPolyline = googlePoly;
+        returnPolyline = [...googlePoly].reverse();
+        shapeSource = 'google_routes';
+      } else if (line.category === 'TRAM') {
+        // =====================================================================
+        // 1. TRAMWAYS (T1, T2) — STRICTLY NO OSRM DRIVING! RAILS ONLY!
+        // =====================================================================
         const relations = tramRelationsByRef.get(line.id.toUpperCase()) || [];
 
         if (relations.length > 0) {

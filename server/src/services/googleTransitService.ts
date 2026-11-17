@@ -65,6 +65,7 @@ export interface GoogleRouteStep {
     maneuver?: string;
   };
   transitDetails?: GoogleTransitDetails;
+  steps?: GoogleRouteStep[];
 }
 
 export interface GoogleRouteLeg {
@@ -249,8 +250,38 @@ function matchWazeControllerReports(
 }
 
 /**
+ * Append decoded coordinates without duplicating consecutive identical points
+ */
+function appendPolylineCoords(
+  target: [number, number][],
+  points: [number, number][]
+): void {
+  for (const pt of points) {
+    const prev = target[target.length - 1];
+    if (
+      prev &&
+      Math.abs(prev[0] - pt[0]) < 1e-6 &&
+      Math.abs(prev[1] - pt[1]) < 1e-6
+    ) {
+      continue;
+    }
+    target.push(pt);
+  }
+}
+
+interface WalkBuffer {
+  durationSeconds: number;
+  distanceMeters: number;
+  polyline: [number, number][];
+  instructions: string[];
+  startTime: Date;
+  precededByTransit: boolean;
+}
+
+/**
  * Pure mapper: transforms a Google Routes API v2 route into DiviAkhaaa's RouteOption
- * enriched with real-time Waze controller alerts and crowd status.
+ * merging consecutive WALK sub-steps into a single clean WALK segment while preserving
+ * all street-by-street instructions, and fusing real-time Waze controller & crowd alerts.
  */
 export function mapGoogleRouteToRouteOption(
   googleRoute: GoogleRoute,
@@ -269,29 +300,88 @@ export function mapGoogleRouteToRouteOption(
   const stopIdsUsed: string[] = [];
   const transitAnchorPoints: [number, number][] = [];
 
-  let walkingDurationMinutes = 0;
+  let walkingDurationSeconds = 0;
   let transitDurationMinutes = 0;
   let transitLegCount = 0;
   let firstTransitDepartureDate: Date | null = null;
   let firstHeadwayMinutes: number | undefined;
   let cursorTime = new Date(nowDate.getTime());
 
+  const hasAnyTransit = leg.steps.some(
+    s => s.travelMode === 'TRANSIT' && Boolean(s.transitDetails)
+  );
+
+  let walkBuffer: WalkBuffer | null = null;
+
+  const flushWalkBuffer = (nextTransitStop?: TransitStop): void => {
+    if (!walkBuffer) return;
+    const buf = walkBuffer;
+    walkBuffer = null;
+
+    const endTime = new Date(buf.startTime.getTime() + buf.durationSeconds * 1000);
+    cursorTime = endTime;
+
+    const isTransferBetweenTransit = buf.precededByTransit && Boolean(nextTransitStop);
+
+    // Same-platform transfer < 20m -> omit from summary pills (keep route clean)
+    if (isTransferBetweenTransit && buf.distanceMeters < 20) {
+      return;
+    }
+
+    // Ignore 0-length / trivial < 20m walk noise when transit is present
+    if (hasAnyTransit && buf.distanceMeters < 20 && buf.durationSeconds < 15) {
+      return;
+    }
+
+    const durationMinutes =
+      buf.distanceMeters > 20 || buf.durationSeconds > 0
+        ? Math.max(1, Math.round(buf.durationSeconds / 60))
+        : 0;
+
+    if (durationMinutes === 0 && hasAnyTransit) {
+      return;
+    }
+
+    walkingDurationSeconds += buf.durationSeconds;
+
+    const summaryInstruction = isTransferBetweenTransit && nextTransitStop
+      ? `Correspondance à pied vers ${nextTransitStop.name}`
+      : nextTransitStop
+        ? `Marcher jusqu'à ${nextTransitStop.name}`
+        : buf.precededByTransit
+          ? `Marcher jusqu'à destination (${buf.distanceMeters} m)`
+          : buf.instructions[0] || `Marcher sur ${buf.distanceMeters} m`;
+
+    const cleanInstructions =
+      buf.instructions.length > 0 ? buf.instructions : [summaryInstruction];
+
+    segments.push({
+      type: 'WALK',
+      instruction: summaryInstruction,
+      durationSeconds: buf.durationSeconds,
+      durationMinutes: Math.max(1, durationMinutes),
+      distanceMeters: buf.distanceMeters,
+      polyline: buf.polyline,
+      toStop: nextTransitStop,
+      instructions: cleanInstructions,
+      turnInstructions: cleanInstructions,
+      departureTime: formatHHMM(buf.startTime),
+      arrivalTime: formatHHMM(endTime),
+    });
+  };
+
   for (const step of leg.steps) {
     const stepSeconds = parseGoogleDurationSeconds(step.staticDuration);
-    const stepMinutes = Math.max(1, Math.round(stepSeconds / 60));
     const stepDistance = step.distanceMeters ?? 0;
     const stepPolyline = step.polyline?.encodedPolyline
       ? decodeGooglePolyline(step.polyline.encodedPolyline)
       : [];
 
     if (stepPolyline.length > 0) {
-      fullPolyline.push(...stepPolyline);
+      appendPolylineCoords(fullPolyline, stepPolyline);
     }
 
     if (step.travelMode === 'TRANSIT' && step.transitDetails) {
-      transitLegCount += 1;
-      transitDurationMinutes += stepMinutes;
-
       const td = step.transitDetails;
       const depStopRaw = td.stopDetails?.departureStop;
       const arrStopRaw = td.stopDetails?.arrivalStop;
@@ -342,6 +432,13 @@ export function mapGoogleRouteToRouteOption(
         lines: [lineShort],
       };
 
+      // Flush any consecutive WALK steps preceding this TRANSIT leg
+      flushWalkBuffer(fromStop);
+
+      const stepMinutes = Math.max(1, Math.round(stepSeconds / 60));
+      transitLegCount += 1;
+      transitDurationMinutes += stepMinutes;
+
       linesUsed.push(lineShort);
       stopIdsUsed.push(depStopId, arrStopId);
       transitAnchorPoints.push([depLat, depLng], [arrLat, arrLng]);
@@ -379,6 +476,7 @@ export function mapGoogleRouteToRouteOption(
       segments.push({
         type: 'TRANSIT',
         instruction: `Prendre le ${vehicleLabel} ${lineShort} (${directionText})`,
+        durationSeconds: stepSeconds,
         durationMinutes: stepMinutes,
         distanceMeters: stepDistance,
         polyline:
@@ -406,27 +504,53 @@ export function mapGoogleRouteToRouteOption(
 
       cursorTime = arrDate;
     } else {
-      // WALK step
-      walkingDurationMinutes += stepMinutes;
-      const endTime = new Date(cursorTime.getTime() + stepMinutes * 60 * 1000);
-      const navText =
-        step.navigationInstruction?.instructions ||
-        `Marcher sur ${stepDistance} m`;
+      // WALK step (or nested WALK sub-steps): accumulate into contiguous WalkBuffer
+      if (!walkBuffer) {
+        walkBuffer = {
+          durationSeconds: 0,
+          distanceMeters: 0,
+          polyline: [],
+          instructions: [],
+          startTime: new Date(cursorTime.getTime()),
+          precededByTransit: transitLegCount > 0,
+        };
+      }
 
-      segments.push({
-        type: 'WALK',
-        instruction: navText,
-        durationMinutes: stepMinutes,
-        distanceMeters: stepDistance,
-        polyline: stepPolyline,
-        turnInstructions: [navText],
-        departureTime: formatHHMM(cursorTime),
-        arrivalTime: formatHHMM(endTime),
-      });
+      const subSteps =
+        step.steps && step.steps.length > 0 ? step.steps : [step];
 
-      cursorTime = endTime;
+      for (const sub of subSteps) {
+        const subSec = parseGoogleDurationSeconds(sub.staticDuration);
+        const subDist = sub.distanceMeters ?? 0;
+        const subPoly = sub.polyline?.encodedPolyline
+          ? decodeGooglePolyline(sub.polyline.encodedPolyline)
+          : [];
+
+        walkBuffer.durationSeconds += subSec;
+        walkBuffer.distanceMeters += subDist;
+        if (subPoly.length > 0) {
+          appendPolylineCoords(walkBuffer.polyline, subPoly);
+        }
+
+        const rawInstr = sub.navigationInstruction?.instructions?.trim();
+        if (rawInstr) {
+          walkBuffer.instructions.push(rawInstr);
+        } else if (subDist > 0) {
+          walkBuffer.instructions.push(`Marcher sur ${subDist} m`);
+        }
+      }
+
+      // If parent step had polyline/duration/distance not covered by nested sub-steps
+      if (step.steps && step.steps.length > 0 && walkBuffer.polyline.length === 0 && stepPolyline.length > 0) {
+        appendPolylineCoords(walkBuffer.polyline, stepPolyline);
+      }
     }
   }
+
+  // Flush any trailing WALK segment to final destination
+  flushWalkBuffer(undefined);
+
+  const walkingDurationMinutes = Math.round(walkingDurationSeconds / 60);
 
   // Fallback to overall encoded polyline if step polylines were empty
   const resolvedFullPolyline =
@@ -585,6 +709,101 @@ export async function computeGoogleTransitRoutes(
     return mapped.length > 0 ? mapped : null;
   } catch (error) {
     console.warn('[GoogleTransitService] Erreur appel Google Routes API:', error);
+    return null;
+  }
+}
+
+/**
+ * Compute a next-weekday 10:00 UTC ISO timestamp so daytime transit shapes
+ * can be queried reliably even when the server boots late at night.
+ */
+function getNextWeekdayDaytimeIso(): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + 1);
+  while (d.getUTCDay() === 0 || d.getUTCDay() === 6) {
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  d.setUTCHours(9, 30, 0, 0); // 10:30 / 11:30 Paris time
+  return d.toISOString();
+}
+
+/**
+ * Extract the exact official TRANSIT polyline for a single Divia line (e.g. T1, T2, L5)
+ * by issuing one Google Routes API TRANSIT request between its termini.
+ */
+export async function fetchGoogleTransitLinePolyline(
+  lineId: string,
+  origin: GoogleLatLng,
+  destination: GoogleLatLng,
+  category: 'TRAM' | 'LIANE' | 'BUS'
+): Promise<[number, number][] | null> {
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY?.trim();
+  if (!apiKey) return null;
+
+  const targetLine = lineId.toUpperCase().trim();
+  const allowedTravelModes = category === 'TRAM' ? ['LIGHT_RAIL'] : ['BUS'];
+
+  const requestBody = {
+    origin: { location: { latLng: origin } },
+    destination: { location: { latLng: destination } },
+    travelMode: 'TRANSIT',
+    computeAlternativeRoutes: true,
+    departureTime: getNextWeekdayDaytimeIso(),
+    transitPreferences: {
+      allowedTravelModes,
+      routingPreference: 'FEWER_TRANSFERS',
+    },
+    languageCode: 'fr',
+    regionCode: 'FR',
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), GOOGLE_ROUTES_TIMEOUT_MS);
+
+    const response = await fetch(GOOGLE_ROUTES_ENDPOINT, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask':
+          'routes.legs.steps.travelMode,routes.legs.steps.polyline.encodedPolyline,routes.legs.steps.transitDetails.transitLine',
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    clearTimeout(timeoutId);
+    if (!response.ok) return null;
+
+    const data = (await response.json()) as GoogleComputeRoutesResponse;
+    if (!data.routes || data.routes.length === 0) return null;
+
+    let bestPolyline: [number, number][] | null = null;
+
+    for (const route of data.routes) {
+      const steps = route.legs?.[0]?.steps || [];
+      for (const step of steps) {
+        if (step.travelMode !== 'TRANSIT' || !step.polyline?.encodedPolyline) continue;
+        const shortName = (
+          step.transitDetails?.transitLine?.nameShort ||
+          step.transitDetails?.transitLine?.name ||
+          ''
+        )
+          .toUpperCase()
+          .trim();
+
+        if (shortName === targetLine || shortName.endsWith(targetLine)) {
+          const decoded = decodeGooglePolyline(step.polyline.encodedPolyline);
+          if (decoded.length >= 6 && (!bestPolyline || decoded.length > bestPolyline.length)) {
+            bestPolyline = decoded;
+          }
+        }
+      }
+    }
+
+    return bestPolyline;
+  } catch {
     return null;
   }
 }

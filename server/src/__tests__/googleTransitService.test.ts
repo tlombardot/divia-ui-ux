@@ -206,8 +206,159 @@ describe('GoogleTransitService — Polyline decoding, TransitDetails mapping & W
     expect(option.crowdStatus?.level).toBe('HIGH');
     expect(option.crowdSummary).toContain('T1');
 
-    // Full polyline concatenates all decoded segments
-    expect(option.fullPolyline.length).toBe(8);
+    // Full polyline concatenates all decoded segments without adjacent duplicates
+    expect(option.fullPolyline.length).toBe(6);
+  });
+
+  it('merges 3 consecutive WALK sub-steps (40s + 50s + 90s) into a single 3 min WALK segment preserving all 3 street instructions', () => {
+    const walk1 = encodeGooglePolyline([
+      [47.3236, 5.0278],
+      [47.3236, 5.0295],
+    ]);
+    const walk2 = encodeGooglePolyline([
+      [47.3236, 5.0295],
+      [47.3235, 5.0315],
+    ]);
+    const walk3 = encodeGooglePolyline([
+      [47.3235, 5.0315],
+      [47.3235, 5.0335],
+    ]);
+    const tramT1 = encodeGooglePolyline([
+      [47.3235, 5.0335],
+      [47.3262, 5.0461],
+    ]);
+    const tramT2 = encodeGooglePolyline([
+      [47.3262, 5.0461],
+      [47.3541, 5.0501],
+    ]);
+    const walkEnd1 = encodeGooglePolyline([
+      [47.3541, 5.0501],
+      [47.3545, 5.0505],
+    ]);
+    const walkEnd2 = encodeGooglePolyline([
+      [47.3545, 5.0505],
+      [47.3550, 5.0510],
+    ]);
+
+    const mockRoute: GoogleRoute = {
+      duration: '1500s',
+      distanceMeters: 4800,
+      legs: [
+        {
+          duration: '1500s',
+          distanceMeters: 4800,
+          steps: [
+            {
+              travelMode: 'WALK',
+              staticDuration: '40s',
+              distanceMeters: 50,
+              navigationInstruction: { instructions: 'Prendre Avenue Foch' },
+              polyline: { encodedPolyline: walk1 },
+            },
+            {
+              travelMode: 'WALK',
+              staticDuration: '50s',
+              distanceMeters: 65,
+              navigationInstruction: { instructions: 'Tourner à droite Rue de la Poste' },
+              polyline: { encodedPolyline: walk2 },
+            },
+            {
+              travelMode: 'WALK',
+              staticDuration: '90s',
+              distanceMeters: 115,
+              navigationInstruction: { instructions: 'Continuer vers Place Darcy' },
+              polyline: { encodedPolyline: walk3 },
+            },
+            {
+              travelMode: 'TRANSIT',
+              staticDuration: '420s',
+              distanceMeters: 1500,
+              polyline: { encodedPolyline: tramT1 },
+              transitDetails: {
+                headsign: 'Quetigny Centre',
+                stopCount: 3,
+                transitLine: { name: 'Tramway T1', nameShort: 'T1', color: '#E11535', vehicle: { type: 'TRAM' } },
+                stopDetails: {
+                  departureStop: { name: 'Darcy', location: { latLng: { latitude: 47.3235, longitude: 5.0335 } } },
+                  arrivalStop: { name: 'République', location: { latLng: { latitude: 47.3262, longitude: 5.0461 } } },
+                },
+              },
+            },
+            // Same-platform transfer < 20m -> must be omitted from summary pills
+            {
+              travelMode: 'WALK',
+              staticDuration: '15s',
+              distanceMeters: 10,
+              navigationInstruction: { instructions: 'Changer sur le même quai' },
+              polyline: { encodedPolyline: '' },
+            },
+            {
+              travelMode: 'TRANSIT',
+              staticDuration: '600s',
+              distanceMeters: 2900,
+              polyline: { encodedPolyline: tramT2 },
+              transitDetails: {
+                headsign: 'Valmy',
+                stopCount: 6,
+                transitLine: { name: 'Tramway T2', nameShort: 'T2', color: '#4B2982', vehicle: { type: 'TRAM' } },
+                stopDetails: {
+                  departureStop: { name: 'République', location: { latLng: { latitude: 47.3262, longitude: 5.0461 } } },
+                  arrivalStop: { name: "Toison d'Or", location: { latLng: { latitude: 47.3541, longitude: 5.0501 } } },
+                },
+              },
+            },
+            // Final 2 consecutive WALK sub-steps (55s + 65s = 120s -> 2 min)
+            {
+              travelMode: 'WALK',
+              staticDuration: '55s',
+              distanceMeters: 70,
+              navigationInstruction: { instructions: 'Traverser Route de Langres' },
+              polyline: { encodedPolyline: walkEnd1 },
+            },
+            {
+              travelMode: 'WALK',
+              staticDuration: '65s',
+              distanceMeters: 90,
+              navigationInstruction: { instructions: "Entrer Centre Commercial Toison d'Or" },
+              polyline: { encodedPolyline: walkEnd2 },
+            },
+          ],
+        },
+      ],
+    };
+
+    const option = mapGoogleRouteToRouteOption(mockRoute, 0, new Date('2026-11-17T08:15:00.000Z'));
+    expect(option).not.toBeNull();
+    if (!option) return;
+
+    // Expected clean chain: WALK(3 min) -> TRANSIT(T1) -> TRANSIT(T2) -> WALK(2 min)
+    expect(option.segments.map(s => s.type)).toEqual(['WALK', 'TRANSIT', 'TRANSIT', 'WALK']);
+
+    const mergedFirstWalk = option.segments[0];
+    expect(mergedFirstWalk.durationSeconds).toBe(180);
+    expect(mergedFirstWalk.durationMinutes).toBe(3);
+    expect(mergedFirstWalk.distanceMeters).toBe(230);
+    expect(mergedFirstWalk.instructions).toEqual([
+      'Prendre Avenue Foch',
+      'Tourner à droite Rue de la Poste',
+      'Continuer vers Place Darcy',
+    ]);
+    expect(mergedFirstWalk.turnInstructions).toHaveLength(3);
+    expect(mergedFirstWalk.polyline).toHaveLength(4); // deduplicated join points
+    expect(mergedFirstWalk.toStop?.name).toBe('Darcy');
+
+    const mergedLastWalk = option.segments[3];
+    expect(mergedLastWalk.durationSeconds).toBe(120);
+    expect(mergedLastWalk.durationMinutes).toBe(2);
+    expect(mergedLastWalk.distanceMeters).toBe(160);
+    expect(mergedLastWalk.instructions).toHaveLength(2);
+
+    // Ensure no two consecutive WALK segments exist
+    for (let i = 0; i < option.segments.length - 1; i++) {
+      expect(
+        option.segments[i].type === 'WALK' && option.segments[i + 1].type === 'WALK'
+      ).toBe(false);
+    }
   });
 
   it('returns null cleanly when GOOGLE_MAPS_API_KEY is not configured', async () => {
