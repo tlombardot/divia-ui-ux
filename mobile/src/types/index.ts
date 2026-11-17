@@ -7,7 +7,12 @@ export interface TransitStop {
 }
 
 export type LineCategory = 'TRAM' | 'LIANE' | 'BUS';
-export type ShapeSource = 'overpass' | 'osrm' | 'fallback';
+export type ShapeSource =
+  | 'google_routes'
+  | 'overpass'
+  | 'overpass_rail_graph'
+  | 'osrm'
+  | 'fallback';
 
 export interface TransitLine {
   id: string;
@@ -41,6 +46,7 @@ export type RouteSegmentType = 'WALK' | 'TRANSIT' | 'TRANSFER';
 export interface RouteSegment {
   type: RouteSegmentType;
   instruction: string;
+  durationSeconds?: number;
   durationMinutes: number;
   distanceMeters: number;
   polyline: [number, number][]; // [lat, lng]
@@ -53,6 +59,7 @@ export interface RouteSegment {
   stopsCount?: number;
   passedStops?: TransitStop[];
   estimatedStopTimes?: string[];
+  instructions?: string[];
   turnInstructions?: string[];
   departureTime?: string;
   arrivalTime?: string;

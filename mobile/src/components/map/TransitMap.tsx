@@ -1,14 +1,17 @@
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
-import { ALL_DIJON_STOPS, getLineColor } from '../../data/dijonNetwork';
+import { ALL_DIJON_STOPS, DIJON_LINES, getLineColor } from '../../data/dijonNetwork';
 import { COLORS } from '../../theme/colors';
-import { Report, RouteOption, TransitStop, UserLocation } from '../../types';
+import { Report, RouteOption, TransitLine, TransitStop, UserLocation } from '../../types';
 import { getCrowdBadgeTheme } from '../../utils/crowdUtils';
+import { computeCorridorOffsets } from '../../utils/polylineOffset';
 
 interface TransitMapProps {
   userLocation: UserLocation;
   reports: Report[];
+  networkLines?: TransitLine[];
+  visibleLineIds?: string[];
   favoriteStopIds?: string[];
   activeRoute?: RouteOption | null;
   selectedStopId?: string | null;
@@ -24,9 +27,45 @@ interface TransitMapProps {
   mapRef?: React.RefObject<MapView | null>;
 }
 
+/**
+ * Convert #RRGGBB hex color to rgba() with exact opacity (e.g. 0.35 when dimmed)
+ */
+function hexWithOpacity(hex: string, opacity: number): string {
+  const clean = hex.replace('#', '');
+  if (clean.length !== 6) return hex;
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+}
+
+function getLineStrokeStyle(line: TransitLine, dimmed: boolean) {
+  if (line.category === 'TRAM') {
+    return {
+      strokeWidth: dimmed ? 3.5 : 5,
+      zIndex: 30,
+      lineDashPattern: undefined as number[] | undefined,
+    };
+  }
+  if (line.category === 'LIANE') {
+    return {
+      strokeWidth: dimmed ? 2.5 : 3.5,
+      zIndex: 20,
+      lineDashPattern: undefined as number[] | undefined,
+    };
+  }
+  return {
+    strokeWidth: dimmed ? 2 : 2.5,
+    zIndex: 10,
+    lineDashPattern: [8, 5] as number[],
+  };
+}
+
 export const TransitMap: React.FC<TransitMapProps> = ({
   userLocation,
   reports,
+  networkLines = DIJON_LINES,
+  visibleLineIds,
   favoriteStopIds = [],
   activeRoute,
   selectedStopId,
@@ -41,6 +80,20 @@ export const TransitMap: React.FC<TransitMapProps> = ({
   onMapPanDrag,
   mapRef,
 }) => {
+  // Filter visible permanent Divia lines
+  const filteredLines = useMemo(() => {
+    if (!visibleLineIds) return networkLines;
+    return networkLines.filter(l => visibleLineIds.includes(l.id));
+  }, [networkLines, visibleLineIds]);
+
+  // Subtle parallel corridor offsets (±2.5m max) so shared T1/T2 corridors stay crisp
+  const offsetLines = useMemo(
+    () => computeCorridorOffsets(filteredLines, 15, 5, 2.5),
+    [filteredLines]
+  );
+
+  const dimmed = Boolean(activeRoute || showControllersOnly);
+
   const activeControllerReports = useMemo(
     () => reports.filter(r => r.status === 'active' && (r.type === 'CONTROLLER' || !r.type)),
     [reports]
@@ -89,6 +142,25 @@ export const TransitMap: React.FC<TransitMapProps> = ({
         showsTraffic={false}
         onPanDrag={onMapPanDrag}
       >
+        {/* Permanent Divia Tram & Bus Network Lines (cached Google Routes / official shapes) */}
+        {offsetLines.map(({ line, coordinates }) => {
+          if (coordinates.length < 2) return null;
+          const styleCfg = getLineStrokeStyle(line, dimmed);
+
+          return (
+            <Polyline
+              key={`network-${line.id}`}
+              coordinates={coordinates}
+              strokeColor={dimmed ? hexWithOpacity(line.color, 0.35) : line.color}
+              strokeWidth={styleCfg.strokeWidth}
+              zIndex={styleCfg.zIndex}
+              lineDashPattern={styleCfg.lineDashPattern}
+              lineCap="round"
+              lineJoin="round"
+            />
+          );
+        })}
+
         {/* Exact Door-to-Door Google Routes API (TRANSIT + WALK) Polylines */}
         {activeRoute && activeRoute.segments && (
           <>

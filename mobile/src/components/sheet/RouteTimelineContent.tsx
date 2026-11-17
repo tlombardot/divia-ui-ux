@@ -87,9 +87,15 @@ export const RouteTimelineContent: React.FC<RouteTimelineContentProps> = ({
           const isExpanded = Boolean(expandedSegments[idx]);
 
           // ===================================================================
-          // WALK Segment (Dashed rail + Turn-by-turn street arrows)
+          // WALK Segment (Dashed rail + Expandable street-by-street instructions)
           // ===================================================================
           if (seg.type === 'WALK') {
+            const detailedSteps =
+              seg.instructions && seg.instructions.length > 0
+                ? seg.instructions
+                : seg.turnInstructions || [];
+            const hasMultipleSteps = detailedSteps.length > 1;
+
             return (
               <View key={`seg-walk-${idx}`} style={styles.segmentBlock}>
                 <View style={styles.nodeRow}>
@@ -108,17 +114,39 @@ export const RouteTimelineContent: React.FC<RouteTimelineContentProps> = ({
                       À pied · {seg.distanceMeters} m ({seg.durationMinutes} min)
                     </Text>
 
-                    {/* Street-by-street OSRM turn instructions */}
-                    {seg.turnInstructions && seg.turnInstructions.length > 0 && (
-                      <View style={styles.turnsBox}>
-                        {seg.turnInstructions.slice(0, 4).map((instr, tIdx) => (
-                          <View key={tIdx} style={styles.turnRow}>
-                            <Text style={styles.turnArrow}>↱</Text>
-                            <Text style={styles.turnText}>{instr}</Text>
+                    {/* Expandable street-by-street detailed walking steps */}
+                    {hasMultipleSteps ? (
+                      <>
+                        <TouchableOpacity
+                          style={styles.accordionBtn}
+                          onPress={() => toggleSegmentAccordion(idx)}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={[styles.accordionText, { color: '#1A73E8' }]}>
+                            {isExpanded
+                              ? 'Masquer le détail rue par rue ⌃'
+                              : `Voir les ${detailedSteps.length} étapes à pied ⌄`}
+                          </Text>
+                        </TouchableOpacity>
+                        {isExpanded && (
+                          <View style={styles.turnsBox}>
+                            {detailedSteps.map((instr, tIdx) => (
+                              <View key={tIdx} style={styles.turnRow}>
+                                <Text style={styles.turnArrow}>↱</Text>
+                                <Text style={styles.turnText}>{instr}</Text>
+                              </View>
+                            ))}
                           </View>
-                        ))}
+                        )}
+                      </>
+                    ) : detailedSteps.length === 1 && detailedSteps[0] !== seg.instruction ? (
+                      <View style={styles.turnsBox}>
+                        <View style={styles.turnRow}>
+                          <Text style={styles.turnArrow}>↱</Text>
+                          <Text style={styles.turnText}>{detailedSteps[0]}</Text>
+                        </View>
                       </View>
-                    )}
+                    ) : null}
                   </View>
                 </View>
               </View>

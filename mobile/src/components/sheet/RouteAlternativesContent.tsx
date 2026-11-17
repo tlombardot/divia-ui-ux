@@ -10,6 +10,7 @@ import { getLineColor } from '../../data/dijonNetwork';
 import { COLORS } from '../../theme/colors';
 import { RouteOption } from '../../types';
 import { getCrowdBadgeTheme } from '../../utils/crowdUtils';
+import { buildMergedSummaryPills } from '../../utils/routeSummaryUtils';
 
 interface RouteAlternativesContentProps {
   routes: RouteOption[];
@@ -28,7 +29,7 @@ export const RouteAlternativesContent: React.FC<RouteAlternativesContentProps> =
     return (
       <View style={styles.centerBox}>
         <ActivityIndicator size="large" color={COLORS.cassis} />
-        <Text style={styles.loadingTitle}>Calcul porte-à-porte Divia + OSRM...</Text>
+        <Text style={styles.loadingTitle}>Calcul porte-à-porte Divia + Google Transit...</Text>
         <Text style={styles.loadingSub}>
           Optimisation des correspondances et vérification des alertes Waze
         </Text>
@@ -87,25 +88,25 @@ export const RouteAlternativesContent: React.FC<RouteAlternativesContentProps> =
                 </View>
               </View>
 
-              {/* Horizontal Multimodal Pill Chain */}
+              {/* Horizontal Multimodal Pill Chain (Consecutive walks always merged) */}
               <View style={styles.chainRow}>
-                {route.segments.map((seg, segIdx) => {
-                  const isLast = segIdx === route.segments.length - 1;
+                {buildMergedSummaryPills(route.segments).map((pill, pillIdx, arr) => {
+                  const isLast = pillIdx === arr.length - 1;
                   return (
-                    <View key={segIdx} style={styles.chainNode}>
-                      {seg.type === 'TRANSIT' && seg.lineId ? (
+                    <View key={pillIdx} style={styles.chainNode}>
+                      {pill.kind === 'TRANSIT' && pill.lineId ? (
                         <View
                           style={[
                             styles.transitPill,
-                            { backgroundColor: seg.lineColor || getLineColor(seg.lineId) },
+                            { backgroundColor: pill.lineColor || getLineColor(pill.lineId) },
                           ]}
                         >
-                          <Text style={styles.transitPillText}>{seg.lineId}</Text>
+                          <Text style={styles.transitPillText}>{pill.lineId}</Text>
                         </View>
-                      ) : seg.type === 'WALK' ? (
+                      ) : pill.kind === 'WALK' ? (
                         <View style={styles.walkPill}>
                           <Text style={styles.walkPillText}>
-                            🚶 {seg.durationMinutes} min
+                            🚶 {pill.durationMinutes} min
                           </Text>
                         </View>
                       ) : (

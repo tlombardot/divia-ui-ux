@@ -6,6 +6,9 @@ import { TransitStop } from '../../types';
 
 interface FloatingSearchHeaderProps {
   onOpenSearch: () => void;
+  onOpenLineFilter: () => void;
+  visibleLinesCount: number;
+  totalLinesCount: number;
   onSelectQuickStop: (stop: TransitStop) => void;
   showControllersOnly: boolean;
   onToggleControllersFilter: () => void;
@@ -24,6 +27,9 @@ const FEATURED_CHIP_IDS = [
 
 export const FloatingSearchHeader: React.FC<FloatingSearchHeaderProps> = ({
   onOpenSearch,
+  onOpenLineFilter,
+  visibleLinesCount,
+  totalLinesCount,
   onSelectQuickStop,
   showControllersOnly,
   onToggleControllersFilter,
@@ -68,13 +74,24 @@ export const FloatingSearchHeader: React.FC<FloatingSearchHeaderProps> = ({
         </TouchableOpacity>
       </View>
 
-      {/* Floating Quick Chips + Waze Controller Filter */}
+      {/* Floating Quick Chips + Divia Line Filter + Waze Controller Filter */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.chipsScroll}
         style={styles.chipsContainer}
       >
+        <TouchableOpacity
+          style={[styles.chip, styles.lineFilterChip]}
+          onPress={onOpenLineFilter}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.lineFilterIcon}>☰</Text>
+          <Text style={styles.lineFilterText}>
+            Lignes ({visibleLinesCount}/{totalLinesCount})
+          </Text>
+        </TouchableOpacity>
+
         <TouchableOpacity
           style={[
             styles.chip,
@@ -234,6 +251,22 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#202124',
+  },
+  lineFilterChip: {
+    backgroundColor: COLORS.cassis,
+    borderWidth: 1,
+    borderColor: COLORS.cassis,
+  },
+  lineFilterIcon: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    marginRight: 6,
+  },
+  lineFilterText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF',
   },
   wazeFilterChip: {
     borderWidth: 1,
