@@ -13,6 +13,11 @@ export default defineConfig({
   resolve: {
     alias: {
       'expo-constants': path.resolve(__dirname, './src/__tests__/__mocks__/expo-constants.ts'),
+      'expo-haptics': path.resolve(__dirname, './src/__tests__/__mocks__/expo-haptics.ts'),
+      '@react-native-async-storage/async-storage': path.resolve(
+        __dirname,
+        './src/__tests__/__mocks__/async-storage.ts'
+      ),
     },
   },
 });
