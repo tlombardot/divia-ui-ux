@@ -43,6 +43,7 @@ out/
 *.sqlite
 *.sqlite3
 data.json
+server/data/network-shapes-cache.json
 
 # Logs & Debug
 npm-debug.log*
