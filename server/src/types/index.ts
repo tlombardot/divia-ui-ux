@@ -194,3 +194,30 @@ export const networkShapesQuerySchema = z.object({
 });
 
 export type NetworkShapesQuery = z.infer<typeof networkShapesQuerySchema>;
+
+export interface PlaceSuggestion {
+  placeId: string;
+  label: string;
+  secondaryText: string;
+  type: 'stop' | 'address' | 'poi';
+  latitude?: number;
+  longitude?: number;
+  source: 'google_places' | 'divia_local' | 'ban_fallback';
+}
+
+export interface PlaceDetailsResult {
+  placeId: string;
+  label: string;
+  formattedAddress: string;
+  latitude: number;
+  longitude: number;
+  type: 'stop' | 'address' | 'poi';
+}
+
+export const placesAutocompleteQuerySchema = z.object({
+  input: z.string().trim().min(2, 'Requête trop courte').max(160),
+});
+
+export const placeDetailsQuerySchema = z.object({
+  placeId: z.string().trim().min(1, 'placeId requis').max(256),
+});

@@ -6,6 +6,8 @@ import helmet from 'helmet';
 import http from 'http';
 import { Server, Socket } from 'socket.io';
 import { ALL_DIJON_STOPS, DIJON_LINES, getLineById, getStopById } from './data/dijonNetwork';
+import { autocompletePlaces, getPlaceDetails } from './services/googlePlacesService';
+import { computeGoogleTransitRoutes } from './services/googleTransitService';
 import { networkGeometryService } from './services/networkGeometryService';
 import { reportService } from './services/reportService';
 import {
@@ -16,6 +18,8 @@ import {
 import {
   createReportSchema,
   networkShapesQuerySchema,
+  placeDetailsQuerySchema,
+  placesAutocompleteQuerySchema,
   routeQuerySchema,
   StationDeparture,
   voteReportSchema,
@@ -74,8 +78,17 @@ const reportRateLimiter = rateLimit({
   message: { error: 'Limite de signalements atteinte. Merci de patienter.' },
 });
 
+const placesRateLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 60, // Limit Places proxy queries to prevent quota abuse
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Limite de recherche d\'adresses atteinte. Merci de patienter.' },
+});
+
 app.use('/api/', generalLimiter);
 app.use('/api/reports', reportRateLimiter);
+app.use('/api/places', placesRateLimiter);
 
 // -----------------------------------------------------------------------------
 // HTTP REST Routes
@@ -189,7 +202,53 @@ app.get('/api/crowd', (_req: Request, res: Response) => {
   });
 });
 
-// Route calculation
+// Google Places API (New) Autocomplete proxy (Dijon biased 20 km)
+app.get('/api/places/autocomplete', async (req: Request, res: Response) => {
+  const parseResult = placesAutocompleteQuerySchema.safeParse(req.query);
+
+  if (!parseResult.success) {
+    res.status(400).json({
+      error: 'Requête d\'autocomplétion invalide',
+      details: parseResult.error.format(),
+    });
+    return;
+  }
+
+  try {
+    const suggestions = await autocompletePlaces(parseResult.data.input);
+    res.status(200).json({ suggestions });
+  } catch (error) {
+    console.error('[Places Autocomplete Error]:', error);
+    res.status(500).json({ error: 'Erreur lors de la recherche d\'adresses' });
+  }
+});
+
+// Google Places API (New) Details proxy
+app.get('/api/places/details', async (req: Request, res: Response) => {
+  const parseResult = placeDetailsQuerySchema.safeParse(req.query);
+
+  if (!parseResult.success) {
+    res.status(400).json({
+      error: 'Identifiant de lieu invalide',
+      details: parseResult.error.format(),
+    });
+    return;
+  }
+
+  try {
+    const place = await getPlaceDetails(parseResult.data.placeId);
+    if (!place) {
+      res.status(404).json({ error: 'Lieu introuvable' });
+      return;
+    }
+    res.status(200).json({ place });
+  } catch (error) {
+    console.error('[Places Details Error]:', error);
+    res.status(500).json({ error: 'Erreur lors de la récupération du lieu' });
+  }
+});
+
+// Route calculation (Google Routes API v2 TRANSIT primary + clean local fallback)
 app.get('/api/routes', async (req: Request, res: Response) => {
   const parseResult = routeQuerySchema.safeParse(req.query);
 
@@ -202,8 +261,14 @@ app.get('/api/routes', async (req: Request, res: Response) => {
   }
 
   try {
-    const routes = await calculateRoutes(parseResult.data);
-    res.status(200).json({ routes });
+    const googleRoutes = await computeGoogleTransitRoutes(parseResult.data);
+    if (googleRoutes && googleRoutes.length > 0) {
+      res.status(200).json({ routes: googleRoutes, source: 'google_routes' });
+      return;
+    }
+
+    const fallbackRoutes = await calculateRoutes(parseResult.data);
+    res.status(200).json({ routes: fallbackRoutes, source: 'local_fallback' });
   } catch (error) {
     console.error('[Routing Error]:', error);
     res.status(500).json({ error: 'Erreur lors du calcul d\'itinéraire' });
