@@ -71,7 +71,7 @@ export class GeocodingService {
       )}&lat=47.3220&lon=5.0415&limit=5`;
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2500);
+      const timeoutId = setTimeout(() => controller.abort(), 1800);
 
       const res = await fetch(url, { signal: controller.signal });
       clearTimeout(timeoutId);

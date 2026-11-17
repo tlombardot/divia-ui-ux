@@ -92,7 +92,7 @@ export class ApiService {
     try {
       const url = `${this.baseUrl}/api/places/autocomplete?input=${encodeURIComponent(input)}`;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      const timeoutId = setTimeout(() => controller.abort(), 1800);
 
       const response = await fetch(url, {
         signal: controller.signal,
@@ -116,7 +116,7 @@ export class ApiService {
     try {
       const url = `${this.baseUrl}/api/places/details?placeId=${encodeURIComponent(placeId)}`;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      const timeoutId = setTimeout(() => controller.abort(), 1800);
 
       const response = await fetch(url, {
         signal: controller.signal,

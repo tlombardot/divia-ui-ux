@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   calculateDistanceMeters,
   DARCY_HUB,
@@ -8,7 +8,7 @@ import {
   QUICK_STOPS,
 } from '../data/dijonNetwork';
 import { geocodingService } from '../services/geocodingService';
-import { getBaseApiUrl } from '../services/apiService';
+import { apiService, getBaseApiUrl } from '../services/apiService';
 
 describe('Mobile Logic & Network Calculations', () => {
   it('correctly calculates distance between Darcy and Dijon Center', () => {
@@ -133,7 +133,9 @@ describe('Geofencing & Automatic Navigation Transitions', () => {
   });
 
   it('searches Dijon stops and POIs with geocoding service', async () => {
+    const spy = vi.spyOn(apiService, 'fetchPlaceAutocomplete').mockResolvedValue([]);
     const results = await geocodingService.searchAddresses('Darcy');
+    spy.mockRestore();
     expect(results.length).toBeGreaterThan(0);
     expect(results.some(r => r.label.toLowerCase().includes('darcy'))).toBe(true);
   });
