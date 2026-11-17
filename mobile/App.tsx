@@ -1,6 +1,7 @@
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+import MapView from 'react-native-maps';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Header } from './src/components/common/Header';
 import { TransitMap } from './src/components/map/TransitMap';
@@ -8,23 +9,31 @@ import { ActiveTripBottomSheet } from './src/components/navigation/ActiveTripBot
 import { RouteSearchBar } from './src/components/navigation/RouteSearchBar';
 import { ReportCard } from './src/components/reports/ReportCard';
 import { ReportModal } from './src/components/reports/ReportModal';
+import { useLiveNavigation } from './src/hooks/useLiveNavigation';
 import { useLocation } from './src/hooks/useLocation';
-import { useNavigationState } from './src/hooks/useNavigationState';
 import { useReports } from './src/hooks/useReports';
 import { apiService } from './src/services/apiService';
 import { GeocodedAddress, Report, RouteOption, TransitStop } from './src/types';
 
 export default function App() {
+  const mapRef = useRef<MapView | null>(null);
   const { location, isDemoMode, refreshLocation } = useLocation();
   const { reports, createReport, voteReport } = useReports();
   const {
     activeRoute,
-    currentStepIndex,
-    isNavigating,
-    startTrip,
-    nextStep,
-    endTrip,
-  } = useNavigationState();
+    navState,
+    currentSegmentIndex,
+    currentLocation,
+    distanceToNextStep,
+    passedStopsCount,
+    alightingWarning,
+    isSimulating,
+    simulationProgress,
+    startNavigation,
+    stopNavigation,
+    startSimulation,
+    stopSimulation,
+  } = useLiveNavigation();
 
   const [originText, setOriginText] = useState<string>('Ma position (GPS)');
   const [destinationText, setDestinationText] = useState<string>('');
@@ -38,6 +47,8 @@ export default function App() {
   const [activeReportCard, setActiveReportCard] = useState<Report | null>(null);
   const [isReportModalVisible, setIsReportModalVisible] = useState<boolean>(false);
   const [isLoadingRoutes, setIsLoadingRoutes] = useState<boolean>(false);
+
+  const isNavigating = navState !== 'IDLE';
 
   // Search routes to a target coordinate
   const fetchRouteAlternatives = useCallback(
@@ -63,72 +74,6 @@ export default function App() {
         if (routes.length > 0) {
           setAvailableRoutes(routes);
           setSelectedRoute(routes[0]);
-        } else {
-          // Fallback client route
-          const fallbackRoute: RouteOption = {
-            id: `route-client-fallback-${Date.now()}`,
-            title: 'Itinéraire direct',
-            departureTime: '19:00',
-            arrivalTime: '19:15',
-            totalDurationMinutes: 15,
-            walkingDurationMinutes: 4,
-            transitDurationMinutes: 11,
-            transfersCount: 0,
-            summary: `T1 direct jusqu'à ${toLabel}`,
-            nextDepartureMinutes: 2,
-            hasControllerAlert: false,
-            alerts: [],
-            fullPolyline: [[fromLat, fromLng], [toLat, toLng]],
-            segments: [
-              {
-                type: 'WALK',
-                instruction: 'Marcher jusqu\'à l\'arrêt de tramway',
-                durationMinutes: 2,
-                distanceMeters: 150,
-                polyline: [[fromLat, fromLng], [fromLat + 0.001, fromLng + 0.001]],
-              },
-              {
-                type: 'TRANSIT',
-                instruction: 'Prendre le Tram T1',
-                durationMinutes: 11,
-                distanceMeters: 2200,
-                polyline: [[fromLat + 0.001, fromLng + 0.001], [toLat - 0.001, toLng - 0.001]],
-                lineId: 'T1',
-                lineColor: '#E11535',
-              },
-              {
-                type: 'WALK',
-                instruction: `Marcher jusqu'à ${toLabel}`,
-                durationMinutes: 2,
-                distanceMeters: 100,
-                polyline: [[toLat - 0.001, toLng - 0.001], [toLat, toLng]],
-              },
-            ],
-            steps: [
-              {
-                type: 'walk',
-                instruction: 'Marcher jusqu\'à l\'arrêt le plus proche',
-                durationMinutes: 2,
-                distanceMeters: 150,
-              },
-              {
-                type: 'transit',
-                instruction: 'Prendre le Tram T1',
-                durationMinutes: 11,
-                distanceMeters: 2200,
-                lineId: 'T1',
-                lineColor: '#E11535',
-              },
-              {
-                type: 'walk',
-                instruction: `Arrivée à ${toLabel}`,
-                durationMinutes: 2,
-                distanceMeters: 100,
-              },
-            ],
-          };
-          setAvailableRoutes([fallbackRoute]);
-          setSelectedRoute(fallbackRoute);
         }
       } catch (err) {
         console.warn('[App] Erreur lors de la recherche d\'itinéraires:', err);
@@ -182,8 +127,19 @@ export default function App() {
 
   const handleStartNavigation = () => {
     if (selectedRoute) {
-      startTrip(selectedRoute);
+      startNavigation(selectedRoute);
       setAvailableRoutes([]);
+    }
+  };
+
+  const handleRecenter = () => {
+    if (mapRef.current) {
+      mapRef.current.animateToRegion({
+        latitude: currentLocation.latitude,
+        longitude: currentLocation.longitude,
+        latitudeDelta: 0.015,
+        longitudeDelta: 0.015,
+      });
     }
   };
 
@@ -194,12 +150,14 @@ export default function App() {
 
         {/* Fullscreen Map with Multi-Segments Route */}
         <TransitMap
-          userLocation={location}
+          mapRef={mapRef}
+          userLocation={isNavigating ? currentLocation : location}
           reports={reports}
-          activeRoute={selectedRoute}
+          activeRoute={isNavigating ? activeRoute : selectedRoute}
           onSelectReport={report => setActiveReportCard(report)}
           onOpenReportModal={() => setIsReportModalVisible(true)}
           onSelectStop={stop => handleSelectQuickStop(stop)}
+          onRecenter={handleRecenter}
         />
 
         {/* Top Header */}
@@ -222,13 +180,20 @@ export default function App() {
           />
         )}
 
-        {/* Active Trip Bottom Sheet (when in navigation) */}
+        {/* Active Trip Bottom Sheet (when in navigation - 100% Geofenced, Zero Manual Buttons) */}
         {isNavigating && activeRoute && (
           <ActiveTripBottomSheet
             route={activeRoute}
-            currentStepIndex={currentStepIndex}
-            onNextStep={nextStep}
-            onEndTrip={endTrip}
+            navState={navState}
+            currentSegmentIndex={currentSegmentIndex}
+            distanceToNextStep={distanceToNextStep}
+            passedStopsCount={passedStopsCount}
+            alightingWarning={alightingWarning}
+            isSimulating={isSimulating}
+            simulationProgress={simulationProgress}
+            onStartSimulation={startSimulation}
+            onStopSimulation={stopSimulation}
+            onEndTrip={stopNavigation}
           />
         )}
 
