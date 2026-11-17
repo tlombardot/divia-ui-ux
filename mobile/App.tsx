@@ -19,6 +19,7 @@ import {
   SheetSnapState,
   ThreeStateBottomSheet,
 } from './src/components/sheet/ThreeStateBottomSheet';
+import { useFavoriteStations } from './src/hooks/useFavoriteStations';
 import { useLiveNavigation } from './src/hooks/useLiveNavigation';
 import { useLocation } from './src/hooks/useLocation';
 import { useReports } from './src/hooks/useReports';
@@ -39,6 +40,7 @@ export default function App() {
   const mapRef = useRef<MapView | null>(null);
   const { location, isDemoMode, refreshLocation } = useLocation();
   const { reports, createReport, voteReport } = useReports();
+  const { favoriteStops, isFavorite, toggleFavorite } = useFavoriteStations(location);
   const {
     activeRoute,
     navState,
@@ -382,7 +384,11 @@ export default function App() {
               <NearbyStopsContent
                 userLocation={location}
                 reports={reports}
+                favoriteStops={favoriteStops}
+                isFavorite={isFavorite}
+                onToggleFavorite={toggleFavorite}
                 onSelectStop={handleSelectStation}
+                onNavigateToStop={handleRouteToStop}
                 onRefreshLocation={refreshLocation}
               />
             )}
@@ -392,6 +398,8 @@ export default function App() {
                 stop={selectedStop}
                 userLocation={location}
                 reports={reports}
+                isFavorite={isFavorite(selectedStop.id)}
+                onToggleFavorite={toggleFavorite}
                 onClose={() => {
                   setSelectedStop(null);
                   setUiMode('explore');

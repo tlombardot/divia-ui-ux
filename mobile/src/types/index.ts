@@ -16,6 +16,19 @@ export interface TransitLine {
   polyline: [number, number][]; // [lat, lng]
 }
 
+export type ReportType = 'CONTROLLER' | 'CROWD';
+export type CrowdLevel = 'LOW' | 'MEDIUM' | 'HIGH';
+export type CrowdSource = 'community' | 'estimated';
+
+export interface CrowdStatus {
+  level: CrowdLevel;
+  source: CrowdSource;
+  label: string;
+  description: string;
+  updatedAt?: number;
+  reportsCount: number;
+}
+
 export type RouteSegmentType = 'WALK' | 'TRANSIT' | 'TRANSFER';
 
 export interface RouteSegment {
@@ -36,6 +49,7 @@ export interface RouteSegment {
   turnInstructions?: string[];
   departureTime?: string;
   arrivalTime?: string;
+  crowdStatus?: CrowdStatus;
 }
 
 export interface RouteStep {
@@ -68,11 +82,14 @@ export interface RouteOption {
   nextDepartureMinutes: number;
   hasControllerAlert: boolean;
   alerts: Report[];
+  crowdStatus?: CrowdStatus;
+  crowdSummary?: string;
   fullPolyline: [number, number][];
 }
 
 export interface Report {
   id: string;
+  type?: ReportType;
   stopId: string;
   stopName: string;
   lineId: string;
@@ -81,6 +98,7 @@ export interface Report {
   longitude: number;
   direction: string;
   description?: string;
+  crowdLevel?: CrowdLevel;
   reportedAt: number;
   expiresAt: number;
   upvotes: number;
