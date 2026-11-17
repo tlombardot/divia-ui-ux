@@ -2,7 +2,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NavState } from '../../hooks/useLiveNavigation';
 import { COLORS } from '../../theme/colors';
-import { RouteOption } from '../../types';
+import { Report, RouteOption } from '../../types';
 
 interface ActiveTripBottomSheetProps {
   route: RouteOption;
@@ -11,6 +11,8 @@ interface ActiveTripBottomSheetProps {
   distanceToNextStep: number;
   passedStopsCount: number;
   alightingWarning: string | null;
+  liveControllerAlert?: Report | null;
+  onDismissControllerAlert?: (id: string) => void;
   isSimulating: boolean;
   simulationProgress: number;
   onStartSimulation: () => void;

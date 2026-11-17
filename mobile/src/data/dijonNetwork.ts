@@ -246,3 +246,53 @@ export function calculateDistanceMeters(
 
   return Math.round(R * c);
 }
+
+export function getLineColor(lineId: string): string {
+  const found = DIJON_LINES.find(l => l.id === lineId);
+  if (found) return found.color;
+  switch (lineId) {
+    case 'T1': return '#E11535';
+    case 'T2': return '#4B2982';
+    case 'L3': return '#F7941E';
+    case 'L4': return '#009EE0';
+    case 'L5': return '#00875A';
+    case 'L6': return '#E6007E';
+    case 'B10': return '#8E44AD';
+    case 'B12': return '#2980B9';
+    case 'B13': return '#D35400';
+    default: return '#821245';
+  }
+}
+
+export function getLiveDeparturesForLine(lineId: string, now: Date = new Date()): [number, number] {
+  const hours = now.getHours();
+  const minutes = now.getMinutes();
+  const timeInMinutes = hours * 60 + minutes;
+  const isPeak = (timeInMinutes >= 450 && timeInMinutes <= 540) || (timeInMinutes >= 1020 && timeInMinutes <= 1110);
+  const isEvening = hours >= 21 || hours < 6;
+
+  let headway = 10;
+  if (lineId === 'T1' || lineId === 'T2') {
+    headway = isPeak ? 4 : isEvening ? 15 : 8;
+  } else if (lineId.startsWith('L')) {
+    headway = isPeak ? 6 : isEvening ? 20 : 10;
+  } else {
+    headway = isPeak ? 10 : isEvening ? 25 : 15;
+  }
+
+  const offset = lineId.charCodeAt(lineId.length - 1) % headway;
+  const rem = (minutes + offset) % headway;
+  const first = Math.max(1, rem === 0 ? headway : headway - rem);
+  return [first, first + headway];
+}
+
+export function getLineDirections(lineId: string): [string, string] {
+  const found = DIJON_LINES.find(l => l.id === lineId);
+  if (found && found.stops.length >= 2) {
+    return [
+      found.stops[found.stops.length - 1].name,
+      found.stops[0].name,
+    ];
+  }
+  return ['Terminus A', 'Terminus B'];
+}

@@ -16,7 +16,7 @@ export type NavState =
 const BOARDING_RADIUS_METERS = 30;
 const TRANSIT_STATION_RADIUS_METERS = 45;
 const DESTINATION_RADIUS_METERS = 25;
-const DIJON_MAX_DISTANCE_METERS = 15000;
+const DIJON_MAX_DISTANCE_METERS = 25000; // 25 km Grand Dijon limit
 
 export function useLiveNavigation() {
   const [activeRoute, setActiveRoute] = useState<RouteOption | null>(null);

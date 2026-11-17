@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { calculateDistanceMeters, DARCY_HUB, DIJON_CENTER } from '../data/dijonNetwork';
 import { UserLocation } from '../types';
 
-const DIJON_MAX_DISTANCE_METERS = 15000; // 15 km limit
+const DIJON_MAX_DISTANCE_METERS = 25000; // 25 km Grand Dijon limit (Chenôve, Talant, Quetigny, Longvic, etc.)
 
 export function useLocation() {
   const [location, setLocation] = useState<UserLocation>({

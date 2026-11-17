@@ -32,7 +32,10 @@ export interface RouteSegment {
   toStop?: TransitStop;
   stopsCount?: number;
   passedStops?: TransitStop[];
+  estimatedStopTimes?: string[];
   turnInstructions?: string[];
+  departureTime?: string;
+  arrivalTime?: string;
 }
 
 export interface RouteStep {
@@ -58,6 +61,7 @@ export interface RouteOption {
   walkingDurationMinutes: number;
   transitDurationMinutes: number;
   transfersCount: number;
+  headwayMinutes?: number;
   segments: RouteSegment[];
   steps: RouteStep[];
   summary: string;
