@@ -9,7 +9,7 @@ export interface TransitStop {
 }
 
 export type LineCategory = 'TRAM' | 'LIANE' | 'BUS';
-export type ShapeSource = 'overpass' | 'osrm' | 'fallback';
+export type ShapeSource = 'overpass' | 'overpass_rail_graph' | 'osrm' | 'fallback';
 
 export interface TransitLine {
   id: string;
@@ -21,7 +21,8 @@ export interface TransitLine {
   color: string;
   textColor: string;
   stops: TransitStop[];
-  polyline: [number, number][]; // [latitude, longitude]
+  polyline: [number, number][]; // Forward (Aller: terminusA -> terminusB)
+  returnPolyline?: [number, number][]; // Return (Retour: terminusB -> terminusA)
   shapeSource?: ShapeSource;
 }
 

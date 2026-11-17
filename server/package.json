@@ -7,6 +7,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
+    "generate:network": "tsx src/scripts/generateNetworkCache.ts",
     "lint": "eslint \"src/**/*.ts\"",
     "test": "vitest run"
   },

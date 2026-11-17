@@ -1,12 +1,24 @@
 import fs from 'fs';
 import path from 'path';
-import { ALL_DIJON_STOPS, DIJON_LINES } from '../data/dijonNetwork';
+import {
+  ALL_DIJON_STOPS,
+  calculateDistanceMeters,
+  DIJON_LINES,
+} from '../data/dijonNetwork';
 import { LineCategory, ShapeSource, TransitLine, TransitStop } from '../types';
+import {
+  densifyPolyline,
+  LatLng,
+  routeOnTramRailGraph,
+  snapStopToPolyline,
+  stitchWays,
+} from '../utils/geometryTopology';
 
 export interface NetworkShapesCachePayload {
   version: number;
   generatedAt: number;
   lines: TransitLine[];
+  stops: TransitStop[];
 }
 
 interface OverpassGeomNode {
@@ -21,13 +33,19 @@ interface OverpassMember {
 }
 
 interface OverpassElement {
-  type: string;
+  type: 'relation' | 'way' | 'node';
+  lat?: number;
+  lon?: number;
   tags?: {
     ref?: string;
     route?: string;
     name?: string;
+    railway?: string;
+    highway?: string;
+    public_transport?: string;
   };
   members?: OverpassMember[];
+  geometry?: OverpassGeomNode[];
 }
 
 interface OverpassResponse {
@@ -37,37 +55,51 @@ interface OverpassResponse {
 interface OSRMRouteResponse {
   code?: string;
   routes?: Array<{
+    distance?: number;
     geometry?: {
       coordinates: [number, number][]; // [lon, lat]
     };
   }>;
 }
 
-const CACHE_VERSION = 1;
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
-const OVERPASS_TIMEOUT_MS = 5000;
-const OSRM_TIMEOUT_MS = 4000;
+export const NETWORK_CACHE_VERSION = 2;
+const OVERPASS_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+];
+const OVERPASS_TIMEOUT_MS = 10000;
+const OSRM_TIMEOUT_MS = 3500;
 const DEFAULT_CACHE_PATH = path.resolve(__dirname, '../../data/network-shapes-cache.json');
+const MAX_OSRM_DETOUR_RATIO = 1.75;
+
+function normalizeName(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
 
 /**
- * Downsample very dense polylines while keeping start/end points intact
+ * Downsample overly dense polylines while preserving sharp geometry & < 140m continuity
  */
-function simplifyPolyline(
-  points: [number, number][],
-  maxPoints: number = 220
-): [number, number][] {
-  if (points.length <= maxPoints) return points;
-  const step = Math.ceil(points.length / maxPoints);
-  const sampled: [number, number][] = [];
-  for (let i = 0; i < points.length; i += step) {
-    sampled.push(points[i]);
+function sanitizeContinuousPolyline(
+  points: LatLng[],
+  maxJumpMeters: number = 145
+): LatLng[] {
+  if (points.length < 2) return points;
+  const deduped: LatLng[] = [points[0]];
+
+  for (let i = 1; i < points.length; i++) {
+    const prev = deduped[deduped.length - 1];
+    const cur = points[i];
+    const d = calculateDistanceMeters(prev[0], prev[1], cur[0], cur[1]);
+    if (d >= 2) {
+      deduped.push(cur);
+    }
   }
-  const last = points[points.length - 1];
-  const prevLast = sampled[sampled.length - 1];
-  if (prevLast[0] !== last[0] || prevLast[1] !== last[1]) {
-    sampled.push(last);
-  }
-  return sampled;
+
+  return densifyPolyline(deduped, Math.min(120, maxJumpMeters - 10));
 }
 
 export class NetworkGeometryService {
@@ -81,9 +113,6 @@ export class NetworkGeometryService {
     this.allowExternalFetch = options?.allowExternalFetch ?? true;
   }
 
-  /**
-   * Read disk cache if valid and matching current schema version
-   */
   public loadFromDiskCache(): NetworkShapesCachePayload | null {
     try {
       if (!fs.existsSync(this.cacheFilePath)) return null;
@@ -92,7 +121,7 @@ export class NetworkGeometryService {
 
       if (
         parsed &&
-        parsed.version === CACHE_VERSION &&
+        parsed.version === NETWORK_CACHE_VERSION &&
         Array.isArray(parsed.lines) &&
         parsed.lines.length === DIJON_LINES.length
       ) {
@@ -104,9 +133,6 @@ export class NetworkGeometryService {
     }
   }
 
-  /**
-   * Persist generated geometries to disk cache
-   */
   public saveToDiskCache(payload: NetworkShapesCachePayload): void {
     try {
       const dir = path.dirname(this.cacheFilePath);
@@ -115,77 +141,151 @@ export class NetworkGeometryService {
       }
       fs.writeFileSync(this.cacheFilePath, JSON.stringify(payload), 'utf-8');
     } catch (err) {
-      console.warn('[NetworkGeometryService] Impossible d\'écrire le cache disque:', err);
+      console.warn('[NetworkGeometryService] Erreur écriture cache disque:', err);
     }
   }
 
-  /**
-   * Query OpenStreetMap Overpass API for real Divia tram & bus geometries in Dijon bbox
-   */
-  private async fetchOverpassDiviaGeometries(): Promise<Map<string, [number, number][]>> {
-    const result = new Map<string, [number, number][]>();
-    if (!this.allowExternalFetch) return result;
+  private async executeOverpassQuery(query: string): Promise<OverpassElement[]> {
+    for (const endpoint of OVERPASS_ENDPOINTS) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), OVERPASS_TIMEOUT_MS);
 
-    const query = `
-      [out:json][timeout:6];
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'DiviAkhaaa-Server/2.0',
+          },
+          body: `data=${encodeURIComponent(query)}`,
+        });
+
+        clearTimeout(timeoutId);
+        if (!res.ok) continue;
+
+        const data = (await res.json()) as OverpassResponse;
+        if (data.elements && data.elements.length > 0) {
+          return data.elements;
+        }
+      } catch {
+        // Try next mirror
+      }
+    }
+    return [];
+  }
+
+  /**
+   * Fetch Overpass OSM data for Dijon:
+   * 1. Dedicated fast query for Tram relations (T1, T2) + full Dijon `railway=tram` rail graph + tram stops
+   * 2. Separate query for Divia Bus relations (Aller & Retour)
+   */
+  private async fetchOverpassDijonData(): Promise<{
+    tramRelationsByRef: Map<string, LatLng[][][]>;
+    busRelationsByRef: Map<string, LatLng[][][]>;
+    tramRailWays: LatLng[][];
+    osmStops: Array<{ name: string; lat: number; lon: number }>;
+  }> {
+    const tramRelationsByRef = new Map<string, LatLng[][][]>();
+    const busRelationsByRef = new Map<string, LatLng[][][]>();
+    const tramRailWays: LatLng[][] = [];
+    const osmStops: Array<{ name: string; lat: number; lon: number }> = [];
+
+    if (!this.allowExternalFetch) {
+      return { tramRelationsByRef, busRelationsByRef, tramRailWays, osmStops };
+    }
+
+    const tramQuery = `
+      [out:json][timeout:10];
       (
-        relation["network"~"Divia",i]["route"~"^(tram|bus)$"](47.27,4.98,47.37,5.12);
+        relation["route"="tram"](47.27,4.98,47.37,5.12);
+        way["railway"="tram"](47.27,4.98,47.37,5.12);
+        node["railway"="tram_stop"](47.27,4.98,47.37,5.12);
       );
       out geom;
     `;
 
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), OVERPASS_TIMEOUT_MS);
+    const busQuery = `
+      [out:json][timeout:10];
+      (
+        relation["route"="bus"]["ref"~"^(L3|L4|L5|L6|B10|B12|B13)$"](47.27,4.98,47.37,5.12);
+      );
+      out geom;
+    `;
 
-      const res = await fetch(OVERPASS_URL, {
-        method: 'POST',
-        signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'User-Agent': 'DiviAkhaaa-Server/1.0',
-        },
-        body: `data=${encodeURIComponent(query)}`,
-      });
+    const [tramElements, busElements] = await Promise.all([
+      this.executeOverpassQuery(tramQuery),
+      this.executeOverpassQuery(busQuery),
+    ]);
 
-      clearTimeout(timeoutId);
-      if (!res.ok) return result;
+    for (const el of [...tramElements, ...busElements]) {
+      if (el.type === 'node' && el.lat !== undefined && el.lon !== undefined && el.tags?.name) {
+        osmStops.push({ name: el.tags.name, lat: el.lat, lon: el.lon });
+        continue;
+      }
 
-      const data = (await res.json()) as OverpassResponse;
-      if (!data.elements) return result;
+      if (el.type === 'way' && el.tags?.railway === 'tram' && el.geometry && el.geometry.length >= 2) {
+        tramRailWays.push(el.geometry.map(pt => [pt.lat, pt.lon]));
+        continue;
+      }
 
-      for (const el of data.elements) {
-        const ref = el.tags?.ref?.toUpperCase().trim();
-        if (!ref || result.has(ref) || !el.members) continue;
+      if (el.type === 'relation' && el.tags?.ref && el.members) {
+        const ref = el.tags.ref.toUpperCase().trim();
+        const ways: LatLng[][] = [];
 
-        const coords: [number, number][] = [];
         for (const m of el.members) {
-          if (m.type === 'way' && m.geometry && m.geometry.length > 0 && m.role !== 'platform') {
-            for (const pt of m.geometry) {
-              coords.push([pt.lat, pt.lon]);
-            }
+          if (
+            m.type === 'way' &&
+            m.geometry &&
+            m.geometry.length >= 2 &&
+            m.role !== 'platform' &&
+            m.role !== 'stop'
+          ) {
+            ways.push(m.geometry.map(pt => [pt.lat, pt.lon]));
           }
         }
 
-        if (coords.length >= 6) {
-          result.set(ref, simplifyPolyline(coords, 220));
+        if (ways.length === 0) continue;
+
+        if (el.tags.route === 'tram') {
+          const list = tramRelationsByRef.get(ref) || [];
+          list.push(ways);
+          tramRelationsByRef.set(ref, list);
+        } else if (el.tags.route === 'bus') {
+          const list = busRelationsByRef.get(ref) || [];
+          list.push(ways);
+          busRelationsByRef.set(ref, list);
         }
       }
-    } catch {
-      // Graceful fallback to OSRM / local coordinates
     }
 
-    return result;
+    return { tramRelationsByRef, busRelationsByRef, tramRailWays, osmStops };
   }
 
   /**
-   * Snap an ordered sequence of stops onto real Dijon streets via OSRM
+   * For BUS fallback ONLY (strictly forbidden for TRAM!):
+   * Snaps stop[i] -> stop[i+1] via OSRM driving ONLY if road distance < 1.75 * crow-fly distance.
    */
-  private async fetchOsrmSnappedLine(stops: TransitStop[]): Promise<[number, number][] | null> {
-    if (!this.allowExternalFetch || stops.length < 2) return null;
+  private async fetchGuardedOsrmBusLeg(stopA: TransitStop, stopB: TransitStop): Promise<LatLng[]> {
+    const fallbackLeg = densifyPolyline(
+      [
+        [stopA.latitude, stopA.longitude],
+        [stopB.latitude, stopB.longitude],
+      ],
+      115
+    );
 
-    const coordsParam = stops.map(s => `${s.longitude},${s.latitude}`).join(';');
-    const url = `https://router.project-osrm.org/route/v1/driving/${coordsParam}?overview=full&geometries=geojson`;
+    if (!this.allowExternalFetch) return fallbackLeg;
+
+    const crowFly = calculateDistanceMeters(
+      stopA.latitude,
+      stopA.longitude,
+      stopB.latitude,
+      stopB.longitude
+    );
+    if (crowFly < 40) return fallbackLeg;
+
+    const url = `https://router.project-osrm.org/route/v1/driving/${stopA.longitude},${stopA.latitude};${stopB.longitude},${stopB.latitude}?overview=full&geometries=geojson`;
 
     try {
       const controller = new AbortController();
@@ -194,69 +294,221 @@ export class NetworkGeometryService {
       const res = await fetch(url, {
         signal: controller.signal,
         headers: {
-          'User-Agent': 'DiviAkhaaa-Server/1.0',
+          'User-Agent': 'DiviAkhaaa-Server/2.0',
           Accept: 'application/json',
         },
       });
-
       clearTimeout(timeoutId);
-      if (!res.ok) return null;
+
+      if (!res.ok) return fallbackLeg;
 
       const data = (await res.json()) as OSRMRouteResponse;
-      const rawCoords = data.routes?.[0]?.geometry?.coordinates;
-      if (!rawCoords || rawCoords.length < 2) return null;
+      const route = data.routes?.[0];
+      const rawCoords = route?.geometry?.coordinates;
+      const roadDist = route?.distance ?? Infinity;
 
-      const latLngs: [number, number][] = rawCoords.map(([lon, lat]) => [lat, lon]);
-      return simplifyPolyline(latLngs, 220);
+      // Strict anti-loop guard: reject OSRM car detour > 1.75x crow-fly distance
+      if (!rawCoords || rawCoords.length < 2 || roadDist > crowFly * MAX_OSRM_DETOUR_RATIO) {
+        return fallbackLeg;
+      }
+
+      const latLngs: LatLng[] = rawCoords.map(([lon, lat]) => [lat, lon]);
+      return sanitizeContinuousPolyline(latLngs, 145);
     } catch {
-      return null;
+      return fallbackLeg;
     }
   }
 
   /**
-   * Generate full network shapes with priority:
-   * 1. OSM Overpass real Divia tracks (especially Tram T1/T2 rails)
-   * 2. OSRM road snapping between ordered stops
-   * 3. Clean fallback to ordered stop coordinates
+   * Assemble a full bus polyline segment-by-segment using guarded OSRM
+   */
+  private async buildGuardedBusFallbackPolyline(orderedStops: TransitStop[]): Promise<LatLng[]> {
+    const full: LatLng[] = [];
+    for (let i = 0; i < orderedStops.length - 1; i++) {
+      const leg = await this.fetchGuardedOsrmBusLeg(orderedStops[i], orderedStops[i + 1]);
+      if (full.length === 0) {
+        full.push(...leg);
+      } else {
+        full.push(...leg.slice(1));
+      }
+    }
+    return sanitizeContinuousPolyline(full, 145);
+  }
+
+  /**
+   * Refine stop coordinates with real OSM stop positions before snapping to track
+   */
+  private enrichStopsWithOsm(
+    stops: TransitStop[],
+    osmStops: Array<{ name: string; lat: number; lon: number }>
+  ): TransitStop[] {
+    if (osmStops.length === 0) return stops;
+
+    return stops.map(stop => {
+      const normTarget = normalizeName(stop.name);
+      let bestMatch: { lat: number; lon: number } | null = null;
+      let bestDist = 250; // max 250m tolerance
+
+      for (const candidate of osmStops) {
+        const normCand = normalizeName(candidate.name);
+        if (
+          normCand === normTarget ||
+          normCand.includes(normTarget) ||
+          normTarget.includes(normCand)
+        ) {
+          const d = calculateDistanceMeters(
+            stop.latitude,
+            stop.longitude,
+            candidate.lat,
+            candidate.lon
+          );
+          if (d < bestDist) {
+            bestDist = d;
+            bestMatch = candidate;
+          }
+        }
+      }
+
+      if (!bestMatch) return stop;
+      return {
+        ...stop,
+        latitude: Number(bestMatch.lat.toFixed(6)),
+        longitude: Number(bestMatch.lon.toFixed(6)),
+      };
+    });
+  }
+
+  /**
+   * Generate full topological network shapes & aligned stations
    */
   public async generateNetworkShapes(): Promise<NetworkShapesCachePayload> {
-    const overpassMap = await this.fetchOverpassDiviaGeometries();
+    const { tramRelationsByRef, busRelationsByRef, tramRailWays, osmStops } =
+      await this.fetchOverpassDijonData();
 
-    const enrichedLines: TransitLine[] = await Promise.all(
-      DIJON_LINES.map(async line => {
-        // 1. Check Overpass geometry first
-        const overpassGeom = overpassMap.get(line.id.toUpperCase());
-        if (overpassGeom && overpassGeom.length >= 6) {
-          return {
-            ...line,
-            polyline: overpassGeom,
-            shapeSource: 'overpass' as ShapeSource,
-          };
+    const enrichedLines: TransitLine[] = [];
+
+    for (const line of DIJON_LINES) {
+      const osmAlignedStops = this.enrichStopsWithOsm(line.stops, osmStops);
+      const startHint: LatLng = [
+        osmAlignedStops[0].latitude,
+        osmAlignedStops[0].longitude,
+      ];
+      const endHint: LatLng = [
+        osmAlignedStops[osmAlignedStops.length - 1].latitude,
+        osmAlignedStops[osmAlignedStops.length - 1].longitude,
+      ];
+
+      let forwardPolyline: LatLng[] = [];
+      let returnPolyline: LatLng[] = [];
+      let shapeSource: ShapeSource = 'fallback';
+
+      // =======================================================================
+      // 1. TRAMWAYS (T1, T2) — STRICTLY NO OSRM DRIVING! RAILS ONLY!
+      // =======================================================================
+      if (line.category === 'TRAM') {
+        const relations = tramRelationsByRef.get(line.id.toUpperCase()) || [];
+
+        if (relations.length > 0) {
+          const stitchedFwd = stitchWays(relations[0], 15, 150, startHint);
+          if (stitchedFwd.length >= 10) {
+            forwardPolyline = sanitizeContinuousPolyline(stitchedFwd, 145);
+            shapeSource = 'overpass';
+
+            if (relations.length >= 2) {
+              const stitchedRet = stitchWays(relations[1], 15, 150, endHint);
+              returnPolyline =
+                stitchedRet.length >= 10
+                  ? sanitizeContinuousPolyline(stitchedRet, 145)
+                  : [...forwardPolyline].reverse();
+            } else {
+              returnPolyline = [...forwardPolyline].reverse();
+            }
+          }
         }
 
-        // 2. Snap ordered stops onto real Dijon streets via OSRM
-        const osrmGeom = await this.fetchOsrmSnappedLine(line.stops);
-        if (osrmGeom && osrmGeom.length >= line.stops.length) {
-          return {
-            ...line,
-            polyline: osrmGeom,
-            shapeSource: 'osrm' as ShapeSource,
-          };
+        // Local Dijkstra rail graph fallback strictly over `railway=tram` ways
+        if (forwardPolyline.length < 10 && tramRailWays.length > 0) {
+          const railPath = routeOnTramRailGraph(tramRailWays, osmAlignedStops);
+          if (railPath && railPath.length >= 10) {
+            forwardPolyline = sanitizeContinuousPolyline(railPath, 145);
+            returnPolyline = [...forwardPolyline].reverse();
+            shapeSource = 'overpass_rail_graph';
+          }
         }
 
-        // 3. Clean fallback to ordered stop coordinates
-        return {
-          ...line,
-          polyline: line.stops.map(s => [s.latitude, s.longitude] as [number, number]),
-          shapeSource: 'fallback' as ShapeSource,
-        };
-      })
-    );
+        // Clean densified fallback along exact Dijon tram rail waypoints (never OSRM car!)
+        if (forwardPolyline.length < 2) {
+          const baseRailWaypoints =
+            line.polyline.length >= osmAlignedStops.length
+              ? line.polyline
+              : osmAlignedStops.map(s => [s.latitude, s.longitude] as LatLng);
+          forwardPolyline = densifyPolyline(baseRailWaypoints, 115);
+          returnPolyline = [...forwardPolyline].reverse();
+          shapeSource = 'fallback';
+        }
+      } else {
+        // =====================================================================
+        // 2. BUS & LIANES (L3..L6, B10..B13) — OSM Directional + Guarded OSRM
+        // =====================================================================
+        const relations = busRelationsByRef.get(line.id.toUpperCase()) || [];
+
+        if (relations.length > 0) {
+          const stitchedFwd = stitchWays(relations[0], 15, 150, startHint);
+          if (stitchedFwd.length >= 6) {
+            forwardPolyline = sanitizeContinuousPolyline(stitchedFwd, 145);
+            shapeSource = 'overpass';
+
+            if (relations.length >= 2) {
+              const stitchedRet = stitchWays(relations[1], 15, 150, endHint);
+              returnPolyline =
+                stitchedRet.length >= 6
+                  ? sanitizeContinuousPolyline(stitchedRet, 145)
+                  : [...forwardPolyline].reverse();
+            } else {
+              returnPolyline = [...forwardPolyline].reverse();
+            }
+          }
+        }
+
+        // Guarded OSRM bus fallback (rejects > 1.75x detours)
+        if (forwardPolyline.length < 6) {
+          forwardPolyline = await this.buildGuardedBusFallbackPolyline(osmAlignedStops);
+          returnPolyline = await this.buildGuardedBusFallbackPolyline(
+            [...osmAlignedStops].reverse()
+          );
+          shapeSource = this.allowExternalFetch ? 'osrm' : 'fallback';
+        }
+      }
+
+      // Snap every station cleanly onto the line's rail/street polyline
+      const snappedStops = osmAlignedStops.map(stop =>
+        snapStopToPolyline(stop, forwardPolyline, 350)
+      );
+
+      enrichedLines.push({
+        ...line,
+        stops: snappedStops,
+        polyline: forwardPolyline,
+        returnPolyline,
+        shapeSource,
+      });
+    }
+
+    // Deduplicate global snapped stops (prioritizing tram rail alignment for hubs)
+    const snappedStopMap = new Map<string, TransitStop>();
+    for (const line of enrichedLines) {
+      for (const stop of line.stops) {
+        if (!snappedStopMap.has(stop.id)) {
+          snappedStopMap.set(stop.id, stop);
+        }
+      }
+    }
 
     const payload: NetworkShapesCachePayload = {
-      version: CACHE_VERSION,
+      version: NETWORK_CACHE_VERSION,
       generatedAt: Date.now(),
       lines: enrichedLines,
+      stops: Array.from(snappedStopMap.values()),
     };
 
     this.memoryCache = payload;
@@ -264,13 +516,11 @@ export class NetworkGeometryService {
     return payload;
   }
 
-  /**
-   * Retrieve cached shapes (< 5ms from memory/disk) or build them on first run
-   */
   public async getNetworkShapes(options?: {
     category?: LineCategory;
     forceRefresh?: boolean;
   }): Promise<{
+    version: number;
     lines: TransitLine[];
     stops: TransitStop[];
     cachedAt: number;
@@ -306,19 +556,30 @@ export class NetworkGeometryService {
       : payload.lines;
 
     return {
+      version: payload.version,
       lines: filteredLines,
-      stops: ALL_DIJON_STOPS,
+      stops: payload.stops || ALL_DIJON_STOPS,
       cachedAt: payload.generatedAt,
       fromCache,
     };
   }
 
   /**
-   * Non-blocking startup warmup
+   * Synchronous fast accessor for routing service (returns cached lines or DIJON_LINES)
    */
+  public getCachedLinesSync(): TransitLine[] {
+    if (this.memoryCache) return this.memoryCache.lines;
+    const disk = this.loadFromDiskCache();
+    if (disk) {
+      this.memoryCache = disk;
+      return disk.lines;
+    }
+    return DIJON_LINES;
+  }
+
   public warmupCache(): void {
     this.getNetworkShapes().catch(() => {
-      // Fallback safely on demand
+      // Safe fallback
     });
   }
 

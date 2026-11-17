@@ -227,6 +227,65 @@ const stopsB13: TransitStop[] = [
   { id: 'b13-mottegiron', name: 'Motte Giron', latitude: 47.3060, longitude: 5.0150, lines: ['B13'] },
 ];
 
+// Real Dijon Tramway rail alignment waypoints (pedestrian center & dedicated tram tracks)
+export const T1_RAIL_WAYPOINTS: [number, number][] = [
+  [47.3236, 5.0278], // Dijon Gare
+  [47.3235, 5.0298], // Foch Gare
+  [47.3235, 5.0318], // Av. Maréchal Foch
+  [47.3235, 5.0335], // Place Darcy
+  [47.3232, 5.0365], // Rue de la Liberté / Porte Guillaume
+  [47.3232, 5.0401], // Godrans Les Halles (zone piétonne)
+  [47.3243, 5.0425], // Rue des Godrans -> Bd Trémouille
+  [47.3256, 5.0445], // Bd de la Trémouille
+  [47.3262, 5.0461], // Place de la République
+  [47.3274, 5.0484], // Bd Clemenceau
+  [47.3283, 5.0506], // Auditorium
+  [47.3285, 5.0548], // Place Jean Bouhey
+  [47.3275, 5.0601], // Poincaré
+  [47.3264, 5.0642], // Av. Raymond Poincaré
+  [47.3251, 5.0682], // Grésilles
+  [47.3240, 5.0715], // Bd Champollion
+  [47.3228, 5.0743], // Parc des Sports
+  [47.3198, 5.0722], // Bd Trimolet
+  [47.3168, 5.0694], // Av. de Lattre
+  [47.3142, 5.0674], // Erasme / CHU
+  [47.3137, 5.0695], // Bd Gabriel
+  [47.3135, 5.0712], // Université
+  [47.3125, 5.0810], // Mazen-Sully
+  [47.3115, 5.0920], // Cap Vert
+  [47.3110, 5.1012], // Grand Marché
+  [47.3101, 5.1095], // Quetigny Centre
+];
+
+export const T2_RAIL_WAYPOINTS: [number, number][] = [
+  [47.3621, 5.0538], // Valmy
+  [47.3582, 5.0526], // Zénith
+  [47.3541, 5.0501], // Toison d'Or
+  [47.3482, 5.0478], // Europe - Simone Veil
+  [47.3431, 5.0452], // Nation
+  [47.3385, 5.0445], // Av. du Drapeau Nord
+  [47.3341, 5.0440], // Drapeau
+  [47.3298, 5.0449], // Av. du Drapeau Sud
+  [47.3262, 5.0461], // Place de la République (tronc commun T1/T2)
+  [47.3256, 5.0445], // Bd de la Trémouille (tronc commun T1/T2)
+  [47.3243, 5.0425], // Rue des Godrans (tronc commun T1/T2)
+  [47.3232, 5.0401], // Godrans Les Halles (tronc commun T1/T2)
+  [47.3232, 5.0365], // Rue de la Liberté (tronc commun T1/T2)
+  [47.3235, 5.0335], // Place Darcy (tronc commun T1/T2)
+  [47.3235, 5.0318], // Av. Foch (tronc commun T1/T2)
+  [47.3235, 5.0298], // Foch Gare (tronc commun T1/T2)
+  [47.3216, 5.0308], // Av. Albert 1er / Pont Arquebuse
+  [47.3196, 5.0328], // Rue de l'Arquebuse
+  [47.3178, 5.0345], // Monge Cité de la Gastronomie
+  [47.3145, 5.0320], // Place du 1er Mai
+  [47.3118, 5.0303], // Av. Jean Jaurès
+  [47.3092, 5.0289], // Bourroches
+  [47.3052, 5.0250], // Av. Jean Jaurès Sud
+  [47.3015, 5.0211], // Carraz
+  [47.2970, 5.0168], // Av. Roland Carraz
+  [47.2928, 5.0125], // Chenôve Centre
+];
+
 // =============================================================================
 // Catalogue Complet des Lignes Divia (Palette Officielle & Catégories)
 // =============================================================================
@@ -241,7 +300,7 @@ export const DIJON_LINES: TransitLine[] = [
     color: '#E11535',
     textColor: '#FFFFFF',
     stops: stopsT1,
-    polyline: stopsT1.map(s => [s.latitude, s.longitude]),
+    polyline: T1_RAIL_WAYPOINTS,
     shapeSource: 'fallback',
   },
   {
@@ -254,7 +313,7 @@ export const DIJON_LINES: TransitLine[] = [
     color: '#4B2982',
     textColor: '#FFFFFF',
     stops: stopsT2,
-    polyline: stopsT2.map(s => [s.latitude, s.longitude]),
+    polyline: T2_RAIL_WAYPOINTS,
     shapeSource: 'fallback',
   },
   {
