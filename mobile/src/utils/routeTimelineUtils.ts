@@ -150,3 +150,24 @@ export function getExpandedIntermediateMapStops(
 
   return markers;
 }
+
+export type TripStepStatus = 'completed' | 'current' | 'upcoming';
+
+/**
+ * Classifies a route segment's progression status during active turn-by-turn navigation.
+ */
+export function getTripStepStatus(
+  segmentIndex: number,
+  activeSegmentIndex?: number
+): TripStepStatus {
+  if (activeSegmentIndex === undefined) {
+    return 'upcoming';
+  }
+  if (segmentIndex < activeSegmentIndex) {
+    return 'completed';
+  }
+  if (segmentIndex === activeSegmentIndex) {
+    return 'current';
+  }
+  return 'upcoming';
+}

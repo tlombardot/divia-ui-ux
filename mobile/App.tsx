@@ -101,6 +101,7 @@ export default function App() {
   const [isLineFilterVisible, setIsLineFilterVisible] = useState<boolean>(false);
   const [reportTargetStop, setReportTargetStop] = useState<TransitStop | null>(null);
   const [dismissedAlertId, setDismissedAlertId] = useState<string | null>(null);
+  const [isNavDetailsOpen, setIsNavDetailsOpen] = useState<boolean>(false);
 
   const effectiveUserLocation = isNavigating ? currentLocation : location;
 
@@ -303,6 +304,7 @@ export default function App() {
 
   const handleStartNavigation = useCallback(() => {
     if (!selectedRoute) return;
+    setIsNavDetailsOpen(false);
     startNavigation(selectedRoute);
     setIsFollowingUser(true);
     animateCameraToUser(mapRef, {
@@ -465,7 +467,9 @@ export default function App() {
           isFollowingUser={isFollowingUser}
           isNavigating={isNavigating}
           floatingBottomOffset={floatingBottomOffset}
-          hideFloatingButtons={!isNavigating && sheetSnap === 'full'}
+          hideFloatingButtons={
+            (!isNavigating && sheetSnap === 'full') || (isNavigating && isNavDetailsOpen)
+          }
           onSelectReport={handleSelectReport}
           onOpenReportModal={handleOpenReportModal}
           onSelectStop={handleSelectStation}
@@ -583,6 +587,8 @@ export default function App() {
         {isNavigating && activeRoute && (
           <ActiveTripBottomSheet
             route={activeRoute}
+            originLabel={originPoint.label}
+            destinationLabel={destinationPoint?.label || destinationText || 'Destination'}
             navState={navState}
             currentSegmentIndex={currentSegmentIndex}
             distanceToNextStep={distanceToNextStep}
@@ -590,11 +596,15 @@ export default function App() {
             alightingWarning={alightingWarning}
             liveControllerAlert={liveControllerAlert}
             onDismissControllerAlert={id => setDismissedAlertId(id)}
+            expandedSegments={expandedTimelineSegments}
+            onToggleSegmentAccordion={handleToggleTimelineSegment}
+            onDetailsOpenChange={setIsNavDetailsOpen}
             isSimulating={isSimulating}
             simulationProgress={simulationProgress}
             onStartSimulation={startSimulation}
             onStopSimulation={stopSimulation}
             onEndTrip={() => {
+              setIsNavDetailsOpen(false);
               stopNavigation();
               setUiMode('explore');
               setSheetSnap('peek');
