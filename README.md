@@ -17,7 +17,7 @@ Lorsque le PC Linux et les téléphones sont connectés au **même réseau Wi-Fi
 Ce script automatisé :
 1. Détecte la vraie adresse IPv4 Wi-Fi du PC Linux (`ip -4 route get 1.1.1.1`, en ignorant Docker `172.17.*` et `127.0.0.1`).
 2. Vérifie le pare-feu Linux (`ufw`) et affiche la commande exacte si les ports `8081` ou `3000` sont bloqués (`sudo ufw allow 8081/tcp && sudo ufw allow 3000/tcp`).
-3. Exécute `npx expo logout` silencieusement pour que le QR code soit scannable par **n'importe quel téléphone** sans compte Expo.
+3. Affiche la session Expo CLI active sans vous déconnecter (sur iOS, Expo Go impose que le PC et l'iPhone utilisent le **même compte Expo** ; astuce : créer un compte gratuit dédié à la démo/équipe).
 4. Démarre le backend `/server` sur `0.0.0.0:3000`, vérifie `http://<WIFI_IP>:3000/health` (`200 OK`), puis lance `REACT_NATIVE_PACKAGER_HOSTNAME=<WIFI_IP> npx expo start --lan --clear`.
 5. L'application mobile résout automatiquement `http://<WIFI_IP>:3000` depuis Expo Go tant que `EXPO_PUBLIC_API_URL=` reste vide dans `mobile/.env` et affiche `[Network] Backend cible : http://<WIFI_IP>:3000`.
 

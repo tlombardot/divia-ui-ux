@@ -194,9 +194,14 @@ echo -e "${GREEN}[1/4]${RESET} IP Wi-Fi détectée : ${CYAN}${WIFI_IP}${RESET} (
 check_ufw_firewall
 clear_stale_tunnel_env
 
-# 3. Déconnexion silencieuse Expo (QR code ouvert à tous les téléphones sans compte)
-echo -e "${GREEN}[2/4]${RESET} Ouverture d'Expo sans compte personnel (npx expo logout)..."
-(cd "$MOBILE_DIR" && npx expo logout >/dev/null 2>&1) || true
+# 3. Vérification session Expo CLI (requis sur iOS : même compte que dans Expo Go)
+EXPO_USER="$( (cd "$MOBILE_DIR" && npx expo whoami 2>/dev/null) | tail -n 1 | tr -d '\r' || true )"
+if [[ -n "$EXPO_USER" && "$EXPO_USER" != "Not logged in" ]]; then
+  echo -e "${GREEN}[2/4]${RESET} Session Expo CLI active : ${CYAN}${EXPO_USER}${RESET} (iOS Expo Go doit utiliser ce même compte)."
+else
+  echo -e "${YELLOW}[2/4]${RESET} Expo CLI non connecté — OK sur Android/émulateur, mais ${YELLOW}iOS Expo Go exige le même compte${RESET} :"
+  echo -e "      Exécute une fois : ${CYAN}cd mobile && npx expo login${RESET} (astuce : utilise un compte démo partagé)."
+fi
 
 # 4. Démarrage du backend sur 0.0.0.0:3000 et attente de http://<WIFI_IP>:3000/health
 if curl -fsS -m 2 -o /dev/null "$HEALTH_URL" 2>/dev/null; then
