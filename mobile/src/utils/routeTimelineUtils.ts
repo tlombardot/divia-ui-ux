@@ -1,14 +1,19 @@
 import { calculateDistanceMeters } from '../data/dijonNetwork';
-import { IntermediateStopInfo, Report, RouteSegment } from '../types';
+import { IntermediateStopInfo, Report, RouteOption, RouteSegment } from '../types';
 
-export type TransitIntermediateDisplayMode = 'accordion' | 'fallback_info' | 'direct';
+export type TransitIntermediateDisplayMode = 'accordion' | 'none';
 
 export interface TransitIntermediateDisplayModel {
   mode: TransitIntermediateDisplayMode;
   intermediateStops: IntermediateStopInfo[];
   collapsedLabel: string | null;
   expandedLabel: string | null;
-  fallbackLabel: string | null;
+}
+
+export interface ExpandedMapStopMarker {
+  segmentIndex: number;
+  lineColor: string;
+  stop: IntermediateStopInfo;
 }
 
 function hasLiveControllerAlertNearStop(
@@ -42,20 +47,22 @@ function hasLiveControllerAlertNearStop(
 }
 
 /**
- * Extracts normalized intermediate stops for a TRANSIT segment, supporting both
- * the structured `segment.intermediateStops` payload and legacy `passedStops` fallback.
+ * Extracts real named intermediate stops for a TRANSIT segment, supporting both
+ * the structured `segment.intermediateStops` payload and legacy `passedStops`.
  */
 export function resolveSegmentIntermediateStops(
   segment: RouteSegment,
   routeAlerts: Report[] = []
 ): IntermediateStopInfo[] {
   if (segment.intermediateStops && segment.intermediateStops.length > 0) {
-    return segment.intermediateStops.map(stop => ({
-      ...stop,
-      hasControllerAlert:
-        stop.hasControllerAlert ||
-        hasLiveControllerAlertNearStop(stop, segment.lineId, routeAlerts),
-    }));
+    return segment.intermediateStops
+      .filter(stop => stop.name.trim().length > 0)
+      .map(stop => ({
+        ...stop,
+        hasControllerAlert:
+          stop.hasControllerAlert ||
+          hasLiveControllerAlertNearStop(stop, segment.lineId, routeAlerts),
+      }));
   }
 
   const passedStops = segment.passedStops || [];
@@ -64,21 +71,22 @@ export function resolveSegmentIntermediateStops(
   }
 
   const stopTimes = segment.estimatedStopTimes || [];
-  return passedStops.slice(1, -1).map((stop, idx) => ({
-    id: stop.id,
-    name: stop.name,
-    latitude: stop.latitude,
-    longitude: stop.longitude,
-    estimatedTime: stopTimes[idx + 1] || '',
-    hasControllerAlert: hasLiveControllerAlertNearStop(stop, segment.lineId, routeAlerts),
-  }));
+  return passedStops
+    .slice(1, -1)
+    .filter(stop => stop.name.trim().length > 0)
+    .map((stop, idx) => ({
+      id: stop.id,
+      name: stop.name,
+      latitude: stop.latitude,
+      longitude: stop.longitude,
+      estimatedTime: stopTimes[idx + 1] || '',
+      hasControllerAlert: hasLiveControllerAlertNearStop(stop, segment.lineId, routeAlerts),
+    }));
 }
 
 /**
- * Computes the UI presentation model for a TRANSIT segment's intermediate stops:
- * - 'accordion': intermediate stops resolved -> show expandable button + full list
- * - 'fallback_info': uncatalogued secondary line with stopCount > 1 -> show clean info row
- * - 'direct': single hop between adjacent stops (no intermediate stations)
+ * Computes the UI presentation model for a TRANSIT segment's real intermediate stops.
+ * Never produces generic placeholder labels (such as "X arrêts sans correspondance").
  */
 export function getTransitIntermediateDisplayModel(
   segment: RouteSegment,
@@ -89,41 +97,56 @@ export function getTransitIntermediateDisplayModel(
   if (intermediateStops.length > 0) {
     const count = intermediateStops.length;
     const collapsedLabel =
-      count === 1
-        ? 'Voir 1 arrêt intermédiaire ⌄'
-        : `Voir les ${count} arrêts intermédiaires ⌄`;
+      count === 1 ? 'Voir 1 arrêt ⌄' : `Voir les ${count} arrêts ⌄`;
 
     return {
       mode: 'accordion',
       intermediateStops,
       collapsedLabel,
-      expandedLabel: 'Masquer les arrêts intermédiaires ⌃',
-      fallbackLabel: null,
-    };
-  }
-
-  const stopCount = segment.stopsCount ?? 0;
-  if (stopCount > 1) {
-    const intermediateCount = stopCount - 1;
-    const fallbackLabel =
-      intermediateCount === 1
-        ? '1 arrêt sans correspondance'
-        : `${intermediateCount} arrêts sans correspondance`;
-
-    return {
-      mode: 'fallback_info',
-      intermediateStops: [],
-      collapsedLabel: null,
-      expandedLabel: null,
-      fallbackLabel,
+      expandedLabel: 'Masquer les arrêts ⌃',
     };
   }
 
   return {
-    mode: 'direct',
+    mode: 'none',
     intermediateStops: [],
     collapsedLabel: null,
     expandedLabel: null,
-    fallbackLabel: null,
   };
+}
+
+/**
+ * Computes the list of real intermediate stop markers to display on the map polyline
+ * for currently expanded timeline segments.
+ */
+export function getExpandedIntermediateMapStops(
+  route: RouteOption | null | undefined,
+  expandedSegmentIndices: number[],
+  routeAlerts: Report[] = [],
+  resolveColor: (lineId: string) => string = () => '#821245'
+): ExpandedMapStopMarker[] {
+  if (!route || expandedSegmentIndices.length === 0) {
+    return [];
+  }
+
+  const expandedSet = new Set(expandedSegmentIndices);
+  const markers: ExpandedMapStopMarker[] = [];
+
+  route.segments.forEach((segment, idx) => {
+    if (segment.type !== 'TRANSIT' || !expandedSet.has(idx)) {
+      return;
+    }
+
+    const lineColor = segment.lineColor || resolveColor(segment.lineId || 'T1');
+    const stops = resolveSegmentIntermediateStops(segment, routeAlerts);
+    for (const stop of stops) {
+      markers.push({
+        segmentIndex: idx,
+        lineColor,
+        stop,
+      });
+    }
+  });
+
+  return markers;
 }

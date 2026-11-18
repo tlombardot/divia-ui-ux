@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { Report, RouteSegment } from '../types';
+import { Report, RouteOption, RouteSegment } from '../types';
 import {
+  getExpandedIntermediateMapStops,
   getTransitIntermediateDisplayModel,
   resolveSegmentIntermediateStops,
 } from '../utils/routeTimelineUtils';
 
-describe('RouteTimelineUtils — Intermediate Stops Display & Safety Nets', () => {
-  it('returns accordion model with plural label, estimated times and controller badge when intermediateStops are provided', () => {
+describe('RouteTimelineUtils — Real Intermediate Stops & Map Coherence', () => {
+  it('returns accordion model with real stop names, estimated times and controller badge', () => {
     const segment: RouteSegment = {
       type: 'TRANSIT',
       instruction: 'Prendre le Tram T1',
@@ -45,14 +46,19 @@ describe('RouteTimelineUtils — Intermediate Stops Display & Safety Nets', () =
 
     const model = getTransitIntermediateDisplayModel(segment, []);
     expect(model.mode).toBe('accordion');
-    expect(model.collapsedLabel).toBe('Voir les 3 arrêts intermédiaires ⌄');
-    expect(model.expandedLabel).toBe('Masquer les arrêts intermédiaires ⌃');
+    expect(model.collapsedLabel).toBe('Voir les 3 arrêts ⌄');
+    expect(model.expandedLabel).toBe('Masquer les arrêts ⌃');
     expect(model.intermediateStops).toHaveLength(3);
+    expect(model.intermediateStops.map(s => s.name)).toEqual([
+      'Foch Gare',
+      'Darcy',
+      'Godrans Les Halles',
+    ]);
     expect(model.intermediateStops[1].estimatedTime).toBe('14:06');
     expect(model.intermediateStops[1].hasControllerAlert).toBe(true);
   });
 
-  it('extracts intermediate stops from legacy passedStops + estimatedStopTimes and fuses live route alerts', () => {
+  it('extracts real intermediate stops from legacy passedStops + estimatedStopTimes and fuses live alerts', () => {
     const legacySegment: RouteSegment = {
       type: 'TRANSIT',
       instruction: 'Prendre le Tram T1',
@@ -98,41 +104,89 @@ describe('RouteTimelineUtils — Intermediate Stops Display & Safety Nets', () =
 
     const model = getTransitIntermediateDisplayModel(legacySegment, [liveAlert]);
     expect(model.mode).toBe('accordion');
-    expect(model.collapsedLabel).toBe('Voir 1 arrêt intermédiaire ⌄');
+    expect(model.collapsedLabel).toBe('Voir 1 arrêt ⌄');
   });
 
-  it('renders safety-net info text when stopCount > 1 on an uncatalogued secondary line', () => {
-    const secondarySegment: RouteSegment = {
+  it('never generates generic fallback labels when intermediateStops is empty', () => {
+    const emptySegment: RouteSegment = {
       type: 'TRANSIT',
-      instruction: 'Prendre le Bus B99',
+      instruction: 'Prendre le Bus B12',
       durationMinutes: 9,
       distanceMeters: 2100,
       polyline: [],
-      lineId: 'B99',
+      lineId: 'B12',
       stopsCount: 5,
       intermediateStops: [],
     };
 
-    const model = getTransitIntermediateDisplayModel(secondarySegment, []);
-    expect(model.mode).toBe('fallback_info');
-    expect(model.fallbackLabel).toBe('4 arrêts sans correspondance');
+    const model = getTransitIntermediateDisplayModel(emptySegment, []);
+    expect(model.mode).toBe('none');
+    expect(model.collapsedLabel).toBeNull();
+    expect(model.expandedLabel).toBeNull();
     expect(model.intermediateStops).toEqual([]);
   });
 
-  it('returns direct mode for a single hop between adjacent stops', () => {
-    const directSegment: RouteSegment = {
-      type: 'TRANSIT',
-      instruction: 'Prendre le Tram T1',
-      durationMinutes: 2,
-      distanceMeters: 450,
-      polyline: [],
-      lineId: 'T1',
-      stopsCount: 1,
-      intermediateStops: [],
+  it('returns map polyline stop markers only for expanded timeline segments', () => {
+    const route: RouteOption = {
+      id: 'route-test',
+      title: 'Recommandé · T1',
+      departureTime: '14:00',
+      arrivalTime: '14:15',
+      totalDurationMinutes: 15,
+      walkingDurationMinutes: 3,
+      transitDurationMinutes: 12,
+      transfersCount: 0,
+      segments: [
+        {
+          type: 'WALK',
+          instruction: 'Marcher vers Dijon Gare',
+          durationMinutes: 3,
+          distanceMeters: 200,
+          polyline: [],
+        },
+        {
+          type: 'TRANSIT',
+          instruction: 'Prendre le Tram T1',
+          durationMinutes: 12,
+          distanceMeters: 2100,
+          polyline: [],
+          lineId: 'T1',
+          lineColor: '#E11535',
+          intermediateStops: [
+            {
+              id: 't1-foch',
+              name: 'Foch Gare',
+              latitude: 47.3235,
+              longitude: 5.0298,
+              estimatedTime: '14:06',
+              hasControllerAlert: false,
+            },
+            {
+              id: 'hub-darcy',
+              name: 'Darcy',
+              latitude: 47.3235,
+              longitude: 5.0335,
+              estimatedTime: '14:09',
+              hasControllerAlert: false,
+            },
+          ],
+        },
+      ],
+      steps: [],
+      summary: 'T1 (12 min)',
+      nextDepartureMinutes: 2,
+      hasControllerAlert: false,
+      alerts: [],
+      fullPolyline: [],
     };
 
-    const model = getTransitIntermediateDisplayModel(directSegment, []);
-    expect(model.mode).toBe('direct');
-    expect(model.fallbackLabel).toBeNull();
+    // Collapsed -> no intermediate markers
+    expect(getExpandedIntermediateMapStops(route, [], [])).toEqual([]);
+
+    // Expanded segment 1 -> both real stops returned with T1 color
+    const markers = getExpandedIntermediateMapStops(route, [1], []);
+    expect(markers).toHaveLength(2);
+    expect(markers.map(m => m.stop.name)).toEqual(['Foch Gare', 'Darcy']);
+    expect(markers[0].lineColor).toBe('#E11535');
   });
 });

@@ -10,6 +10,8 @@ interface RouteTimelineContentProps {
   originLabel: string;
   destinationLabel: string;
   onBackToList: () => void;
+  expandedSegments?: Record<number, boolean>;
+  onToggleSegmentAccordion?: (idx: number) => void;
 }
 
 export const RouteTimelineContent: React.FC<RouteTimelineContentProps> = ({
@@ -17,11 +19,18 @@ export const RouteTimelineContent: React.FC<RouteTimelineContentProps> = ({
   originLabel,
   destinationLabel,
   onBackToList,
+  expandedSegments: controlledExpandedSegments,
+  onToggleSegmentAccordion,
 }) => {
-  const [expandedSegments, setExpandedSegments] = useState<Record<number, boolean>>({});
+  const [localExpandedSegments, setLocalExpandedSegments] = useState<Record<number, boolean>>({});
+  const expandedSegments = controlledExpandedSegments ?? localExpandedSegments;
 
   const toggleSegmentAccordion = (idx: number) => {
-    setExpandedSegments(prev => ({ ...prev, [idx]: !prev[idx] }));
+    if (onToggleSegmentAccordion) {
+      onToggleSegmentAccordion(idx);
+      return;
+    }
+    setLocalExpandedSegments(prev => ({ ...prev, [idx]: !prev[idx] }));
   };
 
   return (
@@ -245,7 +254,7 @@ export const RouteTimelineContent: React.FC<RouteTimelineContentProps> = ({
                     </View>
                   )}
 
-                  {/* Systematic Accordion when intermediate stops are resolved */}
+                  {/* Systematic Accordion showing ONLY real intermediate stops */}
                   {intermediateDisplay.mode === 'accordion' && (
                     <TouchableOpacity
                       style={styles.accordionBtn}
@@ -258,21 +267,6 @@ export const RouteTimelineContent: React.FC<RouteTimelineContentProps> = ({
                           : intermediateDisplay.collapsedLabel}
                       </Text>
                     </TouchableOpacity>
-                  )}
-
-                  {/* UI Safety Net: uncatalogued secondary line with stopCount > 1 */}
-                  {intermediateDisplay.mode === 'fallback_info' &&
-                    intermediateDisplay.fallbackLabel && (
-                      <Text style={styles.fallbackStopsInfo}>
-                        {intermediateDisplay.fallbackLabel} · {seg.durationMinutes} min
-                      </Text>
-                    )}
-
-                  {/* Adjacent direct hop (no intermediate stops) */}
-                  {intermediateDisplay.mode === 'direct' && (
-                    <Text style={styles.fallbackStopsInfo}>
-                      Trajet direct ({seg.durationMinutes} min)
-                    </Text>
                   )}
                 </View>
               </View>
@@ -653,12 +647,6 @@ const styles = StyleSheet.create({
   accordionText: {
     fontSize: 13,
     fontWeight: '700',
-  },
-  fallbackStopsInfo: {
-    marginTop: 6,
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#5F6368',
   },
   intermediateNodeRow: {
     flexDirection: 'row',
