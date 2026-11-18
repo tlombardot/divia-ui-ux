@@ -361,6 +361,7 @@ export default function App() {
           selectedStopId={selectedStop?.id}
           showControllersOnly={showControllersOnly}
           isFollowingUser={isFollowingUser}
+          isNavigating={isNavigating}
           floatingBottomOffset={floatingBottomOffset}
           hideFloatingButtons={!isNavigating && sheetSnap === 'full'}
           onSelectReport={report => setActiveReportCard(report)}
