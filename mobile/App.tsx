@@ -29,6 +29,7 @@ import { useReports } from './src/hooks/useReports';
 import { apiService } from './src/services/apiService';
 import { COLORS } from './src/theme/colors';
 import { GeocodedAddress, Report, RouteOption, TransitLine, TransitStop } from './src/types';
+import { animateCameraToUser } from './src/utils/mapCameraUtils';
 
 type UiScreenMode = 'explore' | 'station' | 'directions' | 'timeline';
 
@@ -282,59 +283,57 @@ export default function App() {
     if (!selectedRoute) return;
     startNavigation(selectedRoute);
     setIsFollowingUser(true);
-    if (mapRef.current) {
-      mapRef.current.animateToRegion(
-        {
-          latitude: effectiveUserLocation.latitude - 0.0008,
-          longitude: effectiveUserLocation.longitude,
-          latitudeDelta: 0.0035,
-          longitudeDelta: 0.0035,
-        },
-        800
-      );
-    }
-  }, [selectedRoute, startNavigation, effectiveUserLocation.latitude, effectiveUserLocation.longitude]);
+    animateCameraToUser(mapRef, {
+      latitude: effectiveUserLocation.latitude,
+      longitude: effectiveUserLocation.longitude,
+      heading: effectiveUserLocation.heading,
+      duration: 800,
+      isNavigating: true,
+    });
+  }, [
+    selectedRoute,
+    startNavigation,
+    effectiveUserLocation.latitude,
+    effectiveUserLocation.longitude,
+    effectiveUserLocation.heading,
+  ]);
 
   // Suivi continu de la position de l'utilisateur style Google Maps pendant la navigation
   useEffect(() => {
     if (!isNavigating || !isFollowingUser || !mapRef.current) return;
-    mapRef.current.animateToRegion(
-      {
-        latitude: effectiveUserLocation.latitude - 0.0008,
-        longitude: effectiveUserLocation.longitude,
-        latitudeDelta: 0.0035,
-        longitudeDelta: 0.0035,
-      },
-      600
-    );
-  }, [isNavigating, isFollowingUser, effectiveUserLocation.latitude, effectiveUserLocation.longitude]);
+    animateCameraToUser(mapRef, {
+      latitude: effectiveUserLocation.latitude,
+      longitude: effectiveUserLocation.longitude,
+      heading: effectiveUserLocation.heading,
+      duration: isSimulating ? 180 : 350,
+      isNavigating: true,
+    });
+  }, [
+    isNavigating,
+    isFollowingUser,
+    isSimulating,
+    effectiveUserLocation.latitude,
+    effectiveUserLocation.longitude,
+    effectiveUserLocation.heading,
+  ]);
 
   const handleRecenter = useCallback(() => {
     if (mapRef.current) {
-      if (isNavigating) {
-        mapRef.current.animateToRegion(
-          {
-            latitude: effectiveUserLocation.latitude - 0.0008,
-            longitude: effectiveUserLocation.longitude,
-            latitudeDelta: 0.0035,
-            longitudeDelta: 0.0035,
-          },
-          600
-        );
-      } else {
-        mapRef.current.animateToRegion(
-          {
-            latitude: effectiveUserLocation.latitude,
-            longitude: effectiveUserLocation.longitude,
-            latitudeDelta: 0.014,
-            longitudeDelta: 0.014,
-          },
-          600
-        );
-      }
+      animateCameraToUser(mapRef, {
+        latitude: effectiveUserLocation.latitude,
+        longitude: effectiveUserLocation.longitude,
+        heading: effectiveUserLocation.heading,
+        duration: 500,
+        isNavigating,
+      });
       setIsFollowingUser(true);
     }
-  }, [effectiveUserLocation.latitude, effectiveUserLocation.longitude, isNavigating]);
+  }, [
+    effectiveUserLocation.latitude,
+    effectiveUserLocation.longitude,
+    effectiveUserLocation.heading,
+    isNavigating,
+  ]);
 
   // "Centrer sur la ligne" from LineFilterSheet
   const handleFocusLine = useCallback(
@@ -540,17 +539,12 @@ export default function App() {
               setUiMode('explore');
               setSheetSnap('peek');
               setIsFollowingUser(true);
-              if (mapRef.current) {
-                mapRef.current.animateToRegion(
-                  {
-                    latitude: effectiveUserLocation.latitude,
-                    longitude: effectiveUserLocation.longitude,
-                    latitudeDelta: 0.014,
-                    longitudeDelta: 0.014,
-                  },
-                  600
-                );
-              }
+              animateCameraToUser(mapRef, {
+                latitude: effectiveUserLocation.latitude,
+                longitude: effectiveUserLocation.longitude,
+                duration: 600,
+                isNavigating: false,
+              });
             }}
           />
         )}

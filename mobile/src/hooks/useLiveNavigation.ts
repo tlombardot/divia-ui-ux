@@ -9,6 +9,7 @@ import {
 } from '../data/dijonNetwork';
 import { storageService } from '../services/storageService';
 import { RouteOption, RouteSegment, UserLocation } from '../types';
+import { generateSmoothTrajectory } from '../utils/trajectoryUtils';
 
 export type NavState =
   | 'IDLE'
@@ -432,39 +433,33 @@ export function useLiveNavigation() {
 
     setIsSimulating(true);
     let index = 0;
-    const polyline = activeRoute.fullPolyline;
+    // Subdivise la polyline en sous-étapes métriques rapprochées (tous les 2.5m)
+    // pour un déplacement GPS continu, réaliste et sans à-coups
+    const trajectory = generateSmoothTrajectory(activeRoute.fullPolyline, 2.5);
+    if (trajectory.length === 0) return;
 
     if (simulationTimerRef.current) clearInterval(simulationTimerRef.current);
 
     simulationTimerRef.current = setInterval(() => {
-      if (index >= polyline.length) {
+      if (index >= trajectory.length) {
         if (simulationTimerRef.current) clearInterval(simulationTimerRef.current);
         setIsSimulating(false);
         setNavState('ARRIVED');
         return;
       }
 
-      const [lat, lon] = polyline[index];
-      const progress = index / (polyline.length - 1);
+      const point = trajectory[index];
+      const progress = index / Math.max(1, trajectory.length - 1);
       setSimulationProgress(progress);
 
-      let heading: number | undefined = undefined;
-      if (index < polyline.length - 1) {
-        const [nextLat, nextLon] = polyline[index + 1];
-        heading = calculateBearing(lat, lon, nextLat, nextLon);
-      } else if (index > 0) {
-        const [prevLat, prevLon] = polyline[index - 1];
-        heading = calculateBearing(prevLat, prevLon, lat, lon);
-      }
-
       processLocationUpdate({
-        latitude: lat,
-        longitude: lon,
-        heading,
+        latitude: point.latitude,
+        longitude: point.longitude,
+        heading: point.heading,
       });
 
       index++;
-    }, 1200); // Avance d'un point toutes les 1.2s pour une simulation fluide
+    }, 140); // 140ms par pas de 2.5m : glissement continu et naturel de guidage GPS
   }, [activeRoute, processLocationUpdate]);
 
   const stopSimulation = useCallback(() => {
