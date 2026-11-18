@@ -10,6 +10,7 @@ const DEV_TUNNEL_ORIGIN_PATTERNS: RegExp[] = [
   /^https?:\/\/([a-z0-9-]+\.)+lhr\.life(:\d+)?$/i,
   /^https?:\/\/([a-z0-9-]+\.)+loca\.lt(:\d+)?$/i,
   /^https?:\/\/([a-z0-9-]+\.)+ngrok-free\.(app|dev)(:\d+)?$/i,
+  /^https?:\/\/([a-z0-9-]+\.)+trycloudflare\.com(:\d+)?$/i,
   /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i,
   /^exp:\/\/[^\s]+$/i,
   /^exps:\/\/[^\s]+$/i,

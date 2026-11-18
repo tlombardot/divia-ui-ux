@@ -16,9 +16,11 @@ Sur un réseau Wi-Fi d'école ou d'entreprise où l'isolation client empêche le
 
 Ce script automatisé :
 1. Démarre le backend `/server` sur `0.0.0.0:3000` et attend que `http://127.0.0.1:3000/health` réponde `200 OK`.
-2. Ouvre un tunnel HTTPS gratuit sans compte via `localhost.run` (`ssh -o StrictHostKeyChecking=no -R 80:127.0.0.1:3000 nokey@localhost.run`).
-3. Capture automatiquement l'URL `https://...lhr.life` générée et met à jour `EXPO_PUBLIC_API_URL` dans `mobile/.env`.
-4. Lance `npx expo start --tunnel --clear` dans `/mobile` et arrête proprement tous les processus sur `Ctrl+C`.
+2. Ouvre un tunnel HTTPS gratuit sans compte : tente d'abord `localhost.run` (SSH), puis bascule automatiquement en moins de 8s sur `cloudflared` ou `localtunnel` (port HTTPS `443`) si le Wi-Fi de l'école bloque le port SSH `22`.
+3. Capture automatiquement l'URL générée, vérifie bout-en-bout `/health -> 200 OK`, et met à jour `EXPO_PUBLIC_API_URL` dans `mobile/.env`.
+4. Lance `npx expo start --tunnel --clear` dans `/mobile` et arrête proprement tous les processus (arbre complet) sur `Ctrl+C`.
+
+> Astuce : pour forcer directement un fournisseur précis (sans attendre le timeout SSH), utilisez `TUNNEL_PROVIDER=localtunnel ./scripts/start-school.sh` (valeurs : `auto`, `localhost.run`, `cloudflared`, `localtunnel`). Pour tester la chaîne backend + tunnel sans lancer Expo : `./scripts/start-school.sh --check-only`.
 
 ---
 
