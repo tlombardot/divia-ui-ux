@@ -1,11 +1,13 @@
 import * as Location from 'expo-location';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { calculateDistanceMeters, DARCY_HUB, DIJON_CENTER } from '../data/dijonNetwork';
 import { UserLocation } from '../types';
+import { shouldAcceptHeadingUpdate } from '../utils/headingUtils';
 
 const DIJON_MAX_DISTANCE_METERS = 25000; // 25 km Grand Dijon limit (Chenôve, Talant, Quetigny, Longvic, etc.)
 
-export function useLocation() {
+export function useLocation(options?: { pauseCompass?: boolean }) {
+  const pauseCompass = options?.pauseCompass ?? false;
   const [location, setLocation] = useState<UserLocation>({
     latitude: DARCY_HUB.latitude,
     longitude: DARCY_HUB.longitude,
@@ -13,6 +15,8 @@ export function useLocation() {
   });
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const lastHeadingRef = useRef<number | null>(null);
+  const lastHeadingUpdateRef = useRef<number>(0);
 
   const fetchLocation = useCallback(async () => {
     setIsLoading(true);
@@ -73,15 +77,17 @@ export function useLocation() {
     fetchLocation();
   }, [fetchLocation]);
 
-  // Suivi en temps réel de la boussole physique du smartphone (orientation / cap)
+  // Suivi en temps réel de la boussole physique du smartphone (throttlé + dead-band anti-jitter)
   useEffect(() => {
+    if (pauseCompass) return;
+
     let isMounted = true;
     let headingSub: Location.LocationSubscription | null = null;
 
     async function startCompassTracking() {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') return;
+        if (status !== 'granted' || !isMounted) return;
 
         headingSub = await Location.watchHeadingAsync(headingObj => {
           if (!isMounted) return;
@@ -92,6 +98,19 @@ export function useLocation() {
 
           if (h >= 0) {
             const rounded = Math.round(h);
+            const now = Date.now();
+            if (
+              !shouldAcceptHeadingUpdate(
+                lastHeadingRef.current,
+                rounded,
+                lastHeadingUpdateRef.current,
+                now
+              )
+            ) {
+              return;
+            }
+            lastHeadingRef.current = rounded;
+            lastHeadingUpdateRef.current = now;
             setLocation(prev => {
               if (prev.heading === rounded) return prev;
               return {
@@ -114,7 +133,7 @@ export function useLocation() {
         headingSub.remove();
       }
     };
-  }, []);
+  }, [pauseCompass]);
 
   return {
     location,

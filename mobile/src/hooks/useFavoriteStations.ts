@@ -129,10 +129,15 @@ export function useFavoriteStations(userLocation?: UserLocation) {
     [persistIds]
   );
 
-  const favoriteStops = useMemo(
-    () => resolveAndSortFavoriteStops(favoriteIds, userLocation),
-    [favoriteIds, userLocation]
-  );
+  const userLat = userLocation?.latitude;
+  const userLng = userLocation?.longitude;
+  const favoriteStops = useMemo(() => {
+    const coords =
+      userLat !== undefined && userLng !== undefined
+        ? { latitude: userLat, longitude: userLng, isDemoMode: false }
+        : undefined;
+    return resolveAndSortFavoriteStops(favoriteIds, coords);
+  }, [favoriteIds, userLat, userLng]);
 
   return {
     favoriteIds,

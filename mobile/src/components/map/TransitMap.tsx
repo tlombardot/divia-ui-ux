@@ -69,7 +69,7 @@ function getLineStrokeStyle(line: TransitLine, dimmed: boolean) {
   };
 }
 
-export const TransitMap: React.FC<TransitMapProps> = ({
+export const TransitMap: React.FC<TransitMapProps> = React.memo(({
   userLocation,
   reports,
   networkLines = DIJON_LINES,
@@ -110,20 +110,59 @@ export const TransitMap: React.FC<TransitMapProps> = ({
 
   const dimmed = Boolean(activeRoute || showControllersOnly);
 
+  const favoriteStopIdSet = useMemo(() => new Set(favoriteStopIds), [favoriteStopIds]);
+
   const activeControllerReports = useMemo(
     () => reports.filter(r => r.status === 'active' && (r.type === 'CONTROLLER' || !r.type)),
     [reports]
   );
 
-  // Resolve live stop-by-stop progressions for each active controller
+  // Resolve live stop-by-stop progressions + precomputed halo coordinates for each active controller
   const trackedControllers = useMemo(
     () =>
-      activeControllerReports.map(report => ({
-        report,
-        progression: resolveControllerProgression(report, Date.now(), networkLines),
-      })),
+      activeControllerReports.map(report => {
+        const progression = resolveControllerProgression(report, Date.now(), networkLines);
+        const haloCoords =
+          progression &&
+          progression.mode === 'MOVING' &&
+          progression.alertPolyline.length >= 2
+            ? progression.alertPolyline.map(([latitude, longitude]) => ({
+                latitude,
+                longitude,
+              }))
+            : null;
+        return {
+          report,
+          progression,
+          haloCoords,
+        };
+      }),
     [activeControllerReports, networkLines]
   );
+
+  // Precompute coordinate arrays and intermediate stops for activeRoute segments (avoids per-render reallocations)
+  const activeRouteSegmentsData = useMemo(() => {
+    if (!activeRoute || !activeRoute.segments) return [];
+    return activeRoute.segments.map((segment, idx) => {
+      const coords = segment.polyline.map(([latitude, longitude]) => ({
+        latitude,
+        longitude,
+      }));
+      const isExpanded =
+        expandedTransitSegmentIndices === undefined ||
+        expandedTransitSegmentIndices.includes(idx);
+      const intermediateStops =
+        segment.type === 'TRANSIT' && isExpanded
+          ? resolveSegmentIntermediateStops(segment, reports)
+          : [];
+      return { segment, idx, coords, intermediateStops };
+    });
+  }, [activeRoute, expandedTransitSegmentIndices, reports]);
+
+  const userHeading =
+    typeof userLocation.heading === 'number' && !Number.isNaN(userLocation.heading)
+      ? userLocation.heading
+      : 0;
 
   // Active community crowd reports indexed by stopId
   const activeCrowdByStop = useMemo(() => {
@@ -215,14 +254,9 @@ export const TransitMap: React.FC<TransitMapProps> = ({
         })}
 
         {/* Exact Door-to-Door Google Routes API (TRANSIT + WALK) Polylines */}
-        {activeRoute && activeRoute.segments && (
+        {activeRoute && activeRouteSegmentsData.length > 0 && (
           <>
-            {activeRoute.segments.map((segment, idx) => {
-              const coords = segment.polyline.map(([lat, lon]) => ({
-                latitude: lat,
-                longitude: lon,
-              }));
-
+            {activeRouteSegmentsData.map(({ segment, idx, coords }) => {
               if (coords.length < 2) return null;
 
               if (segment.type === 'WALK' || segment.type === 'TRANSFER') {
@@ -265,7 +299,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
             })}
 
             {/* Boarding / Intermediate / Transfer / Alighting Markers */}
-            {activeRoute.segments.map((segment, idx) => {
+            {activeRouteSegmentsData.map(({ segment, idx, intermediateStops }) => {
               if (segment.type !== 'TRANSIT') return null;
               const segColor =
                 segment.lineColor || getLineColor(segment.lineId || 'T1');
@@ -274,6 +308,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                 <React.Fragment key={`seg-markers-${idx}`}>
                   {segment.fromStop && (
                     <Marker
+                      key={`board-${idx}-${segment.fromStop.id}-${segment.lineId || ''}`}
                       coordinate={{
                         latitude: segment.fromStop.latitude,
                         longitude: segment.fromStop.longitude,
@@ -285,6 +320,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                           : `Ligne ${segment.lineId}`
                       }
                       anchor={{ x: 0.5, y: 0.5 }}
+                      tracksViewChanges={false}
                       zIndex={62}
                     >
                       <View
@@ -300,46 +336,46 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                     </Marker>
                   )}
 
-                  {(expandedTransitSegmentIndices === undefined ||
-                    expandedTransitSegmentIndices.includes(idx)) &&
-                    resolveSegmentIntermediateStops(segment, reports).map(interStop => (
-                      <Marker
-                        key={`inter-${idx}-${interStop.id}`}
-                        coordinate={{
-                          latitude: interStop.latitude,
-                          longitude: interStop.longitude,
-                        }}
-                        title={interStop.name}
-                        description={
-                          interStop.estimatedTime
-                            ? `Passage estimé : ${interStop.estimatedTime}`
-                            : undefined
-                        }
-                        anchor={{ x: 0.5, y: 0.5 }}
-                        tracksViewChanges={false}
-                        zIndex={58}
-                      >
-                        <View
-                          style={[
-                            styles.routeIntermediateDot,
-                            {
-                              borderColor: interStop.hasControllerAlert
-                                ? COLORS.error
-                                : segColor,
-                            },
-                          ]}
-                        />
-                      </Marker>
-                    ))}
+                  {intermediateStops.map(interStop => (
+                    <Marker
+                      key={`inter-${idx}-${interStop.id}-${interStop.hasControllerAlert ? 'a' : 'n'}`}
+                      coordinate={{
+                        latitude: interStop.latitude,
+                        longitude: interStop.longitude,
+                      }}
+                      title={interStop.name}
+                      description={
+                        interStop.estimatedTime
+                          ? `Passage estimé : ${interStop.estimatedTime}`
+                          : undefined
+                      }
+                      anchor={{ x: 0.5, y: 0.5 }}
+                      tracksViewChanges={false}
+                      zIndex={58}
+                    >
+                      <View
+                        style={[
+                          styles.routeIntermediateDot,
+                          {
+                            borderColor: interStop.hasControllerAlert
+                              ? COLORS.error
+                              : segColor,
+                          },
+                        ]}
+                      />
+                    </Marker>
+                  ))}
 
                   {segment.toStop && (
                     <Marker
+                      key={`alight-${idx}-${segment.toStop.id}`}
                       coordinate={{
                         latitude: segment.toStop.latitude,
                         longitude: segment.toStop.longitude,
                       }}
                       title={`Descendre : ${segment.toStop.name}`}
                       anchor={{ x: 0.5, y: 0.5 }}
+                      tracksViewChanges={false}
                       zIndex={62}
                     >
                       <View
@@ -357,6 +393,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
             {/* Final Destination Pin */}
             {activeRoute.fullPolyline.length > 0 && (
               <Marker
+                key={`dest-${activeRoute.id}`}
                 coordinate={{
                   latitude:
                     activeRoute.fullPolyline[activeRoute.fullPolyline.length - 1][0],
@@ -365,6 +402,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                 }}
                 title="Destination"
                 anchor={{ x: 0.5, y: 0.5 }}
+                tracksViewChanges={false}
                 zIndex={68}
               >
                 <View style={styles.destPinOuter}>
@@ -375,8 +413,9 @@ export const TransitMap: React.FC<TransitMapProps> = ({
           </>
         )}
 
-        {/* User Position Marker (Google Maps Navigation Arrow) */}
+        {/* User Position Marker (GPU-rotated Navigation Arrow, zero per-frame SVG rasterization) */}
         <Marker
+          key={`user-arrow-${isNavigating ? 'nav' : 'idle'}`}
           coordinate={{
             latitude: userLocation.latitude,
             longitude: userLocation.longitude,
@@ -384,20 +423,18 @@ export const TransitMap: React.FC<TransitMapProps> = ({
           title="Votre position"
           anchor={{ x: 0.5, y: 0.5 }}
           flat={true}
-          tracksViewChanges={true}
+          rotation={userHeading}
+          tracksViewChanges={false}
           zIndex={80}
         >
-          <NavigationArrowMarker
-            heading={userLocation.heading}
-            isNavigating={isNavigating}
-          />
+          <NavigationArrowMarker isNavigating={isNavigating} />
         </Marker>
 
         {/* All Clickable Divia Stations (Tram, Liane, Bus) + Favorites (★) + Crowd Badges */}
         {!showControllersOnly &&
           visibleStops.map(stop => {
             const isSelected = stop.id === selectedStopId;
-            const isFav = favoriteStopIds.includes(stop.id);
+            const isFav = favoriteStopIdSet.has(stop.id);
             const isTramStop = stop.lines.includes('T1') || stop.lines.includes('T2');
             const tramColor = stop.lines.includes('T1') ? '#E11535' : '#4B2982';
             const crowdRep = activeCrowdByStop.get(stop.id);
@@ -407,12 +444,13 @@ export const TransitMap: React.FC<TransitMapProps> = ({
 
             return (
               <Marker
-                key={`stop-${stop.id}`}
+                key={`stop-${stop.id}-${isSelected ? 's' : ''}-${isFav ? 'f' : ''}-${crowdTheme?.level || 'n'}`}
                 coordinate={{
                   latitude: stop.latitude,
                   longitude: stop.longitude,
                 }}
                 anchor={{ x: 0.5, y: 0.5 }}
+                tracksViewChanges={false}
                 zIndex={isSelected ? 52 : crowdTheme ? 45 : isFav ? 42 : isTramStop ? 34 : 24}
                 onPress={() => onSelectStop && onSelectStop(stop)}
               >
@@ -470,18 +508,10 @@ export const TransitMap: React.FC<TransitMapProps> = ({
           })}
 
         {/* Predictive Controller Threat Halo Polylines & Upcoming Threatened Stop Dots */}
-        {trackedControllers.map(({ report, progression }) => {
-          if (
-            !progression ||
-            progression.mode !== 'MOVING' ||
-            progression.alertPolyline.length < 2
-          ) {
+        {trackedControllers.map(({ report, progression, haloCoords }) => {
+          if (!progression || !haloCoords) {
             return null;
           }
-          const haloCoords = progression.alertPolyline.map(([latitude, longitude]) => ({
-            latitude,
-            longitude,
-          }));
 
           return (
             <React.Fragment key={`ctrl-halo-${report.id}`}>
@@ -504,7 +534,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
               />
               {progression.upcomingStops.map(upStop => (
                 <Marker
-                  key={`ctrl-up-${report.id}-${upStop.stationId}`}
+                  key={`ctrl-up-${report.id}-${upStop.stationId}-${upStop.etaMinutes}`}
                   coordinate={{
                     latitude: upStop.latitude,
                     longitude: upStop.longitude,
@@ -523,15 +553,16 @@ export const TransitMap: React.FC<TransitMapProps> = ({
           );
         })}
 
-        {/* Active Waze Controller Reports Markers (🚨) Centered Directly on Line Polyline */}
+        {/* Active Controller Reports Markers (🚨) Centered Directly on Line Polyline */}
         {trackedControllers.map(({ report, progression }) => {
           const lat = progression?.currentLatitude ?? report.latitude;
           const lng = progression?.currentLongitude ?? report.longitude;
           return (
             <Marker
-              key={report.id}
+              key={`ctrl-${report.id}-${report.lineId}-${progression?.mode || 's'}-${showControllersOnly ? 'e' : 'n'}`}
               coordinate={{ latitude: lat, longitude: lng }}
               anchor={{ x: 0.5, y: 0.5 }}
+              tracksViewChanges={false}
               zIndex={82}
               onPress={() => onSelectReport(report)}
             >
@@ -581,7 +612,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
             </TouchableOpacity>
           )}
 
-          {/* Waze Controller Report Button with Live Counter Badge */}
+          {/* Controller Report Button with Live Counter Badge */}
           <TouchableOpacity
             style={styles.fabReport}
             onPress={onOpenReportModal}
@@ -602,7 +633,9 @@ export const TransitMap: React.FC<TransitMapProps> = ({
       )}
     </View>
   );
-};
+});
+
+TransitMap.displayName = 'TransitMap';
 
 const styles = StyleSheet.create({
   container: {

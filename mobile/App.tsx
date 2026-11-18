@@ -42,17 +42,7 @@ interface CoordPoint {
 
 export default function App() {
   const mapRef = useRef<MapView | null>(null);
-  const { location, isDemoMode, refreshLocation } = useLocation();
-  const { reports, controllerReports, createReport, voteReport } = useReports();
-  const { favoriteIds, favoriteStops, isFavorite, toggleFavorite } = useFavoriteStations(location);
-  const { lines: networkLines } = useNetworkShapes();
-  const {
-    visibleLineIds,
-    totalLinesCount,
-    toggleLine,
-    ensureLineVisible,
-    applyPreset,
-  } = useLineFilter(networkLines);
+  const lastCameraAnimateRef = useRef<number>(0);
   const {
     activeRoute,
     navState,
@@ -68,6 +58,20 @@ export default function App() {
     startSimulation,
     stopSimulation,
   } = useLiveNavigation();
+  const isNavigating = navState !== 'IDLE';
+  const { location, isDemoMode, refreshLocation } = useLocation({
+    pauseCompass: isNavigating,
+  });
+  const { reports, controllerReports, createReport, voteReport } = useReports();
+  const { favoriteIds, favoriteStops, isFavorite, toggleFavorite } = useFavoriteStations(location);
+  const { lines: networkLines } = useNetworkShapes();
+  const {
+    visibleLineIds,
+    totalLinesCount,
+    toggleLine,
+    ensureLineVisible,
+    applyPreset,
+  } = useLineFilter(networkLines);
 
   const [uiMode, setUiMode] = useState<UiScreenMode>('explore');
   const [sheetSnap, setSheetSnap] = useState<SheetSnapState>('peek');
@@ -98,7 +102,6 @@ export default function App() {
   const [reportTargetStop, setReportTargetStop] = useState<TransitStop | null>(null);
   const [dismissedAlertId, setDismissedAlertId] = useState<string | null>(null);
 
-  const isNavigating = navState !== 'IDLE';
   const effectiveUserLocation = isNavigating ? currentLocation : location;
 
   // Reset expanded timeline accordions whenever the selected route changes
@@ -317,9 +320,14 @@ export default function App() {
     effectiveUserLocation.heading,
   ]);
 
-  // Suivi continu de la position de l'utilisateur style Google Maps pendant la navigation
+  // Suivi continu de la position de l'utilisateur style Google Maps pendant la navigation (throttlé)
   useEffect(() => {
     if (!isNavigating || !isFollowingUser || !mapRef.current) return;
+    const now = Date.now();
+    const minInterval = isSimulating ? 150 : 300;
+    if (now - lastCameraAnimateRef.current < minInterval) return;
+    lastCameraAnimateRef.current = now;
+
     animateCameraToUser(mapRef, {
       latitude: effectiveUserLocation.latitude,
       longitude: effectiveUserLocation.longitude,
@@ -335,6 +343,23 @@ export default function App() {
     effectiveUserLocation.longitude,
     effectiveUserLocation.heading,
   ]);
+
+  const handleSelectReport = useCallback((report: Report) => {
+    setActiveReportCard(report);
+  }, []);
+
+  const handleOpenReportModal = useCallback(() => {
+    setReportTargetStop(null);
+    setIsReportModalVisible(true);
+  }, []);
+
+  const handleMapPanDrag = useCallback(() => {
+    setIsFollowingUser(false);
+  }, []);
+
+  const handleOpenLineFilter = useCallback(() => {
+    setIsLineFilterVisible(true);
+  }, []);
 
   const handleRecenter = useCallback(() => {
     if (mapRef.current) {
@@ -441,21 +466,18 @@ export default function App() {
           isNavigating={isNavigating}
           floatingBottomOffset={floatingBottomOffset}
           hideFloatingButtons={!isNavigating && sheetSnap === 'full'}
-          onSelectReport={report => setActiveReportCard(report)}
-          onOpenReportModal={() => {
-            setReportTargetStop(null);
-            setIsReportModalVisible(true);
-          }}
+          onSelectReport={handleSelectReport}
+          onOpenReportModal={handleOpenReportModal}
           onSelectStop={handleSelectStation}
           onRecenter={handleRecenter}
-          onMapPanDrag={() => setIsFollowingUser(false)}
+          onMapPanDrag={handleMapPanDrag}
         />
 
         {/* Top Explore Search Bar OR Connected Directions Header */}
         {!isNavigating && (uiMode === 'explore' || uiMode === 'station') && (
           <FloatingSearchHeader
             onOpenSearch={handleOpenSearch}
-            onOpenLineFilter={() => setIsLineFilterVisible(true)}
+            onOpenLineFilter={handleOpenLineFilter}
             visibleLinesCount={visibleLineIds.length}
             totalLinesCount={totalLinesCount}
             onSelectQuickStop={handleRouteToStop}

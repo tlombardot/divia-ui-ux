@@ -13,59 +13,59 @@ interface NavigationArrowMarkerProps {
  * - Halo de précision radar pulsant au sol
  * - Orientation en temps réel selon le cap (heading en degrés)
  */
-export const NavigationArrowMarker: React.FC<NavigationArrowMarkerProps> = ({
-  heading,
-  isNavigating = false,
-}) => {
-  const rotation = typeof heading === 'number' && !isNaN(heading) ? heading : 0;
+export const NavigationArrowMarker: React.FC<NavigationArrowMarkerProps> = React.memo(
+  ({ heading, isNavigating = false }) => {
+    const rotation = typeof heading === 'number' && !isNaN(heading) ? heading : 0;
 
-  return (
-    <View style={styles.container}>
-      {/* Halo d'aura radar translucide au sol */}
-      <View style={[styles.pulseRing, isNavigating && styles.pulseRingNav]} />
+    return (
+      <View style={styles.container}>
+        {/* Halo d'aura radar translucide au sol */}
+        <View style={[styles.pulseRing, isNavigating && styles.pulseRingNav]} />
 
-      <View style={[styles.arrowWrapper, { transform: [{ rotate: `${rotation}deg` }] }]}>
-        <Svg width={42} height={42} viewBox="0 0 42 42">
-          {/* Ombre portée douce */}
-          <Path
-            d="M21 4 L36 36 L21 28 L6 36 Z"
-            fill="rgba(0, 0, 0, 0.22)"
-            transform="translate(0, 2)"
-          />
+        <View
+          style={[
+            styles.arrowWrapper,
+            rotation !== 0 && { transform: [{ rotate: `${rotation}deg` }] },
+          ]}
+        >
+          <Svg width={42} height={42} viewBox="0 0 42 42">
+            {/* Ombre portée douce */}
+            <Path
+              d="M21 4 L36 36 L21 28 L6 36 Z"
+              fill="rgba(0, 0, 0, 0.22)"
+              transform="translate(0, 2)"
+            />
 
-          {/* Contour extérieur blanc pour contraste maximal sur la carte */}
-          <Path
-            d="M21 4 L36 36 L21 28 L6 36 Z"
-            fill="#FFFFFF"
-            stroke="#FFFFFF"
-            strokeWidth={3}
-            strokeLinejoin="round"
-          />
+            {/* Contour extérieur blanc pour contraste maximal sur la carte */}
+            <Path
+              d="M21 4 L36 36 L21 28 L6 36 Z"
+              fill="#FFFFFF"
+              stroke="#FFFFFF"
+              strokeWidth={3}
+              strokeLinejoin="round"
+            />
 
-          {/* Aile gauche (Bleu clair 500 - lumière 3D) */}
-          <Path
-            d="M21 7 L8 33 L21 27 Z"
-            fill="#4285F4"
-          />
+            {/* Aile gauche (Bleu clair 500 - lumière 3D) */}
+            <Path d="M21 7 L8 33 L21 27 Z" fill="#4285F4" />
 
-          {/* Aile droite (Bleu profond 600 - ombre 3D) */}
-          <Path
-            d="M21 7 L34 33 L21 27 Z"
-            fill="#1A73E8"
-          />
+            {/* Aile droite (Bleu profond 600 - ombre 3D) */}
+            <Path d="M21 7 L34 33 L21 27 Z" fill="#1A73E8" />
 
-          {/* Arête centrale illuminée */}
-          <Path
-            d="M21 7 L21 27"
-            stroke="#8AB4F8"
-            strokeWidth={1}
-            strokeLinecap="round"
-          />
-        </Svg>
+            {/* Arête centrale illuminée */}
+            <Path
+              d="M21 7 L21 27"
+              stroke="#8AB4F8"
+              strokeWidth={1}
+              strokeLinecap="round"
+            />
+          </Svg>
+        </View>
       </View>
-    </View>
-  );
-};
+    );
+  }
+);
+
+NavigationArrowMarker.displayName = 'NavigationArrowMarker';
 
 const styles = StyleSheet.create({
   container: {

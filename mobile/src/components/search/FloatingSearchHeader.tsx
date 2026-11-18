@@ -1,3 +1,4 @@
+import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { QUICK_STOPS } from '../../data/dijonNetwork';
@@ -22,7 +23,7 @@ const FEATURED_CHIP_IDS = [
   'hub-monge',
 ];
 
-export const FloatingSearchHeader: React.FC<FloatingSearchHeaderProps> = ({
+export const FloatingSearchHeader: React.FC<FloatingSearchHeaderProps> = React.memo(({
   onOpenSearch,
   onOpenLineFilter,
   visibleLinesCount,
@@ -102,7 +103,9 @@ export const FloatingSearchHeader: React.FC<FloatingSearchHeaderProps> = ({
       </ScrollView>
     </View>
   );
-};
+});
+
+FloatingSearchHeader.displayName = 'FloatingSearchHeader';
 
 const styles = StyleSheet.create({
   wrapper: {
