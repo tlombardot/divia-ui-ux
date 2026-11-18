@@ -1,7 +1,12 @@
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { calculateDistanceMeters, DARCY_HUB, DIJON_CENTER } from '../data/dijonNetwork';
+import {
+  calculateBearing,
+  calculateDistanceMeters,
+  DARCY_HUB,
+  DIJON_CENTER,
+} from '../data/dijonNetwork';
 import { storageService } from '../services/storageService';
 import { RouteOption, RouteSegment, UserLocation } from '../types';
 
@@ -33,6 +38,9 @@ export function useLiveNavigation() {
     longitude: DARCY_HUB.longitude,
     isDemoMode: true,
   });
+
+  const lastLocationRef = useRef<UserLocation>(currentLocation);
+  lastLocationRef.current = currentLocation;
 
   const locationSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
   const simulationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -295,17 +303,33 @@ export function useLiveNavigation() {
 
             // Bascule sur Darcy si testeur à > 15 km
             if (dist > DIJON_MAX_DISTANCE_METERS) {
-              setCurrentLocation({
+              setCurrentLocation(prev => ({
+                ...prev,
                 latitude: DARCY_HUB.latitude,
                 longitude: DARCY_HUB.longitude,
                 isDemoMode: true,
-                heading: position.coords.heading,
-              });
+                heading: position.coords.heading ?? prev.heading,
+              }));
             } else {
+              const posLat = position.coords.latitude;
+              const posLon = position.coords.longitude;
+              let heading: number | null | undefined = position.coords.heading;
+
+              // Si le heading natif n'est pas fourni (< 0 ou null), calculer le cap par rapport à la position précédente
+              if (heading === null || heading === undefined || heading < 0) {
+                const prev = lastLocationRef.current;
+                const moved = calculateDistanceMeters(prev.latitude, prev.longitude, posLat, posLon);
+                if (moved >= 2) {
+                  heading = calculateBearing(prev.latitude, prev.longitude, posLat, posLon);
+                } else {
+                  heading = prev.heading;
+                }
+              }
+
               processLocationUpdate({
-                latitude: position.coords.latitude,
-                longitude: position.coords.longitude,
-                heading: position.coords.heading,
+                latitude: posLat,
+                longitude: posLon,
+                heading,
               });
             }
           }
@@ -363,6 +387,20 @@ export function useLiveNavigation() {
 
     setNavState(initialNavState);
 
+    // Initialise le cap le long des premiers mètres du trajet si disponible
+    if (route.fullPolyline && route.fullPolyline.length >= 2) {
+      const initialBearing = calculateBearing(
+        route.fullPolyline[0][0],
+        route.fullPolyline[0][1],
+        route.fullPolyline[1][0],
+        route.fullPolyline[1][1]
+      );
+      setCurrentLocation(prev => ({
+        ...prev,
+        heading: initialBearing,
+      }));
+    }
+
     storageService.saveActiveNavigation({
       activeRoute: route,
       currentSegmentIndex: 0,
@@ -410,9 +448,19 @@ export function useLiveNavigation() {
       const progress = index / (polyline.length - 1);
       setSimulationProgress(progress);
 
+      let heading: number | undefined = undefined;
+      if (index < polyline.length - 1) {
+        const [nextLat, nextLon] = polyline[index + 1];
+        heading = calculateBearing(lat, lon, nextLat, nextLon);
+      } else if (index > 0) {
+        const [prevLat, prevLon] = polyline[index - 1];
+        heading = calculateBearing(prevLat, prevLon, lat, lon);
+      }
+
       processLocationUpdate({
         latitude: lat,
         longitude: lon,
+        heading,
       });
 
       index++;

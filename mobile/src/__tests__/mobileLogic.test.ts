@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  calculateBearing,
   calculateDistanceMeters,
   DARCY_HUB,
   DIJON_CENTER,
@@ -20,6 +21,24 @@ describe('Mobile Logic & Network Calculations', () => {
     );
     expect(dist).toBeGreaterThan(500);
     expect(dist).toBeLessThan(1000);
+  });
+
+  it('correctly calculates cardinal bearings (North, East, South, West)', () => {
+    // North: lat increases, lon constant
+    const bearingNorth = calculateBearing(47.32, 5.04, 47.33, 5.04);
+    expect(bearingNorth).toBe(0);
+
+    // East: lat constant, lon increases
+    const bearingEast = calculateBearing(47.32, 5.04, 47.32, 5.05);
+    expect(bearingEast).toBe(90);
+
+    // South: lat decreases, lon constant
+    const bearingSouth = calculateBearing(47.32, 5.04, 47.31, 5.04);
+    expect(bearingSouth).toBe(180);
+
+    // West: lat constant, lon decreases
+    const bearingWest = calculateBearing(47.32, 5.04, 47.32, 5.03);
+    expect(bearingWest).toBe(270);
   });
 
   it('covers the entire Grand Dijon agglomeration within 25 km radius', () => {
