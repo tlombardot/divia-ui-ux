@@ -16,7 +16,17 @@ import {
   TransitStop,
 } from '../types';
 import { buildRoutePredictiveAlerts } from './controllerTrackerService';
+import {
+  DiviaCatalogData,
+  DiviaCatalogLine,
+  diviaCatalogService,
+  normalizeDiviaLineCode,
+} from './diviaCatalogService';
 import { reportService } from './reportService';
+import {
+  computeCumulativeDistances,
+  projectPointOntoPolyline,
+} from '../utils/geometryTopology';
 
 export interface GoogleLatLng {
   latitude: number;
@@ -174,7 +184,10 @@ function formatHHMM(date: Date): string {
   return `${h}:${m}`;
 }
 
-const MAX_GPS_STOP_MATCH_METERS = 180;
+const MAX_GPS_STOP_MATCH_METERS = 250;
+const MAX_POLYLINE_STOP_DISTANCE_METERS = 35;
+const TERMINAL_STOP_EXCLUSION_METERS = 45;
+const CONTROLLER_PROXIMITY_METERS = 180;
 
 const STOP_NAME_PARASITE_WORDS = new Set([
   'dijon',
@@ -274,10 +287,10 @@ function findClosestStopIndexByGps(
  * Hybrid resolver locating a boarding or alighting stop index on a local Divia line:
  * 1. Exact fuzzy-normalized name match ("Place Darcy" -> "Darcy", "Gare SNCF" -> "Dijon Gare")
  * 2. Partial token/substring match (disambiguated by GPS when multiple candidates exist)
- * 3. Mandatory GPS fallback via Haversine distance (< 180m)
+ * 3. Mandatory GPS fallback via Haversine distance (< 250m)
  */
 export function resolveStopIndexOnLine(
-  line: TransitLine,
+  line: Pick<TransitLine | DiviaCatalogLine, 'stops'>,
   stopName?: string,
   coords?: GoogleLatLng
 ): number {
@@ -385,7 +398,7 @@ export function isControllerNearStop(
   lineId: string,
   activeControllers: Report[]
 ): boolean {
-  const upperLine = lineId.toUpperCase().trim();
+  const upperLine = normalizeDiviaLineCode(lineId) || lineId.toUpperCase().trim();
   return activeControllers.some(rep => {
     if (rep.stopId === stop.id || rep.progression?.currentStopId === stop.id) {
       return true;
@@ -399,50 +412,286 @@ export function isControllerNearStop(
     if (dist <= 120) {
       return true;
     }
-    return rep.lineId.toUpperCase().trim() === upperLine && dist <= MAX_GPS_STOP_MATCH_METERS;
+    const repLine = normalizeDiviaLineCode(rep.lineId) || rep.lineId.toUpperCase().trim();
+    return repLine === upperLine && dist <= CONTROLLER_PROXIMITY_METERS;
   });
 }
 
+interface ProjectedStopCandidate {
+  stop: TransitStop;
+  distanceToPolyline: number;
+  distanceAlongPolyline: number;
+  matchesLine: boolean;
+}
+
 /**
- * Reconstructs ordered intermediate stops (forward OR reversed return direction) for a
- * Google Routes API v2 TRANSIT leg using hybrid fuzzy-name + GPS matching and linearly
- * interpolated estimated passing times.
+ * Layer 2 — Spatial extraction along Google's decoded TRANSIT polyline:
+ * Searches all Dijon stops within 35m of `decodedPolyline` (excluding boarding & alighting
+ * stops), deduplicates opposite-side platforms, sorts strictly by progressive
+ * `distanceAlongPolyline`, and retains up to `expectedCount` matching stops.
  */
-export function resolveIntermediateStopsForTransitLeg(
-  lineId: string,
-  depStopRaw: GoogleTransitStop | undefined,
-  arrStopRaw: GoogleTransitStop | undefined,
-  depDate: Date,
-  arrDate: Date,
-  activeControllers: Report[] = reportService.getActiveControllerReports(),
-  linesCatalog: TransitLine[] = DIJON_LINES
+export function resolveIntermediateStopsAlongPolyline(
+  decodedPolyline: [number, number][],
+  allStops: TransitStop[],
+  options: {
+    lineId?: string;
+    depStopRaw?: GoogleTransitStop;
+    arrStopRaw?: GoogleTransitStop;
+    expectedCount?: number;
+    maxDistanceMeters?: number;
+  } = {}
+): TransitStop[] {
+  if (!decodedPolyline || decodedPolyline.length < 2 || allStops.length === 0) {
+    return [];
+  }
+
+  const maxDist = options.maxDistanceMeters ?? MAX_POLYLINE_STOP_DISTANCE_METERS;
+  const normalizedLine = normalizeDiviaLineCode(options.lineId);
+  const depNormName = options.depStopRaw?.name
+    ? normalizeStopNameForMatching(options.depStopRaw.name)
+    : '';
+  const arrNormName = options.arrStopRaw?.name
+    ? normalizeStopNameForMatching(options.arrStopRaw.name)
+    : '';
+
+  const depCoords: GoogleLatLng = options.depStopRaw?.location?.latLng ?? {
+    latitude: decodedPolyline[0][0],
+    longitude: decodedPolyline[0][1],
+  };
+  const arrCoords: GoogleLatLng = options.arrStopRaw?.location?.latLng ?? {
+    latitude: decodedPolyline[decodedPolyline.length - 1][0],
+    longitude: decodedPolyline[decodedPolyline.length - 1][1],
+  };
+
+  const cumDistances = computeCumulativeDistances(decodedPolyline);
+  const totalPolylineLength = cumDistances[cumDistances.length - 1] ?? 0;
+  if (totalPolylineLength <= 0) {
+    return [];
+  }
+
+  const rawCandidates: ProjectedStopCandidate[] = [];
+
+  for (const stop of allStops) {
+    const stopNorm = normalizeStopNameForMatching(stop.name);
+    if (!stopNorm) continue;
+
+    // Exclude boarding and alighting stops by normalized name or proximity
+    if (
+      (depNormName && stopNorm === depNormName) ||
+      (arrNormName && stopNorm === arrNormName)
+    ) {
+      continue;
+    }
+
+    const distFromDep = calculateDistanceMeters(
+      stop.latitude,
+      stop.longitude,
+      depCoords.latitude,
+      depCoords.longitude
+    );
+    const distFromArr = calculateDistanceMeters(
+      stop.latitude,
+      stop.longitude,
+      arrCoords.latitude,
+      arrCoords.longitude
+    );
+    if (
+      distFromDep < TERMINAL_STOP_EXCLUSION_METERS ||
+      distFromArr < TERMINAL_STOP_EXCLUSION_METERS
+    ) {
+      continue;
+    }
+
+    const proj = projectPointOntoPolyline([stop.latitude, stop.longitude], decodedPolyline);
+    if (proj.distanceMeters > maxDist) {
+      continue;
+    }
+
+    const segStart = decodedPolyline[proj.segmentIndex];
+    const segEnd = decodedPolyline[proj.segmentIndex + 1];
+    const segLen =
+      segStart && segEnd
+        ? calculateDistanceMeters(segStart[0], segStart[1], segEnd[0], segEnd[1])
+        : 0;
+    const distanceAlongPolyline = (cumDistances[proj.segmentIndex] ?? 0) + proj.t * segLen;
+
+    // Exclude stops sitting right on the polyline's start/end terminals
+    if (
+      distanceAlongPolyline < 35 ||
+      totalPolylineLength - distanceAlongPolyline < 35
+    ) {
+      continue;
+    }
+
+    const matchesLine =
+      normalizedLine.length > 0 &&
+      stop.lines.some(l => normalizeDiviaLineCode(l) === normalizedLine);
+
+    rawCandidates.push({
+      stop,
+      distanceToPolyline: proj.distanceMeters,
+      distanceAlongPolyline,
+      matchesLine,
+    });
+  }
+
+  if (rawCandidates.length === 0) {
+    return [];
+  }
+
+  // Deduplicate twin opposite-side platforms sharing the same normalized name (keep closest to polyline)
+  const bestByName = new Map<string, ProjectedStopCandidate>();
+  for (const cand of rawCandidates) {
+    const key = normalizeStopNameForMatching(cand.stop.name);
+    const existing = bestByName.get(key);
+    if (
+      !existing ||
+      (cand.matchesLine && !existing.matchesLine) ||
+      (cand.matchesLine === existing.matchesLine &&
+        cand.distanceToPolyline < existing.distanceToPolyline)
+    ) {
+      bestByName.set(key, cand);
+    }
+  }
+
+  // Sort strictly along polyline from departure -> arrival
+  const sorted = Array.from(bestByName.values()).sort(
+    (a, b) => a.distanceAlongPolyline - b.distanceAlongPolyline
+  );
+
+  // Deduplicate distinct stops clustered within 40m along the polyline
+  const deduped: ProjectedStopCandidate[] = [];
+  for (const cand of sorted) {
+    const prev = deduped[deduped.length - 1];
+    if (prev && Math.abs(cand.distanceAlongPolyline - prev.distanceAlongPolyline) < 40) {
+      const replacePrev =
+        (cand.matchesLine && !prev.matchesLine) ||
+        (cand.matchesLine === prev.matchesLine &&
+          cand.distanceToPolyline < prev.distanceToPolyline);
+      if (replacePrev) {
+        deduped[deduped.length - 1] = cand;
+      }
+      continue;
+    }
+    deduped.push(cand);
+  }
+
+  const expectedCount = options.expectedCount ?? 0;
+  if (expectedCount > 0 && deduped.length > expectedCount) {
+    // Rank candidates by line membership + closeness to polyline, then re-sort by progression
+    const ranked = [...deduped]
+      .sort((a, b) => {
+        if (a.matchesLine !== b.matchesLine) return a.matchesLine ? -1 : 1;
+        return a.distanceToPolyline - b.distanceToPolyline;
+      })
+      .slice(0, expectedCount)
+      .sort((a, b) => a.distanceAlongPolyline - b.distanceAlongPolyline);
+
+    return ranked.map(c => c.stop);
+  }
+
+  return deduped.map(c => c.stop);
+}
+
+export interface ResolveIntermediateStopsParams {
+  lineId: string;
+  depStopRaw?: GoogleTransitStop;
+  arrStopRaw?: GoogleTransitStop;
+  depDate: Date;
+  arrDate: Date;
+  stopCount?: number;
+  decodedPolyline?: [number, number][];
+  activeControllers?: Report[];
+  catalog?: DiviaCatalogData;
+}
+
+/**
+ * Double-Layer Intermediate Stop Resolver:
+ * - Layer 1 (Topological by line): resolves board/alight index on the normalized Divia line
+ *   via fuzzy name + <250m GPS fallback, supporting both forward & reversed directions.
+ * - Layer 2 (Spatial along Google polyline): if Layer 1 fails or stops are missing relative
+ *   to Google's `stopCount - 1`, scans all Dijon stops within 35m of `decodedPolyline` sorted
+ *   strictly along the route progression.
+ */
+export function resolveIntermediateStops(
+  params: ResolveIntermediateStopsParams
 ): IntermediateStopInfo[] {
-  const normalizedLineId = lineId.toUpperCase().trim();
-  const line = linesCatalog.find(l => l.id.toUpperCase() === normalizedLineId);
-  if (!line || line.stops.length < 3) {
-    return [];
+  const {
+    lineId,
+    depStopRaw,
+    arrStopRaw,
+    depDate,
+    arrDate,
+    stopCount,
+    decodedPolyline = [],
+    activeControllers = reportService.getActiveControllerReports(),
+    catalog = diviaCatalogService.getCatalogSync(),
+  } = params;
+
+  const normalizedLineId = normalizeDiviaLineCode(lineId) || lineId.toUpperCase().trim();
+  const expectedIntermediates =
+    typeof stopCount === 'number' && stopCount > 1 ? stopCount - 1 : 0;
+
+  // Layer 1: Topological lookup on the normalized Divia line
+  let layer1Stops: TransitStop[] = [];
+  const catalogLine = catalog.lines.find(
+    l => normalizeDiviaLineCode(l.id) === normalizedLineId
+  );
+
+  if (catalogLine && catalogLine.stops.length >= 3) {
+    const boardIndex = resolveStopIndexOnLine(
+      catalogLine,
+      depStopRaw?.name,
+      depStopRaw?.location?.latLng
+    );
+    const alightIndex = resolveStopIndexOnLine(
+      catalogLine,
+      arrStopRaw?.name,
+      arrStopRaw?.location?.latLng
+    );
+
+    if (boardIndex !== -1 && alightIndex !== -1 && boardIndex !== alightIndex) {
+      layer1Stops =
+        boardIndex < alightIndex
+          ? catalogLine.stops.slice(boardIndex + 1, alightIndex)
+          : catalogLine.stops.slice(alightIndex + 1, boardIndex).reverse();
+    }
   }
 
-  const boardIndex = resolveStopIndexOnLine(line, depStopRaw?.name, depStopRaw?.location?.latLng);
-  const alightIndex = resolveStopIndexOnLine(line, arrStopRaw?.name, arrStopRaw?.location?.latLng);
+  // Layer 2: Spatial extraction along Google polyline if Layer 1 failed or missed stops
+  let finalOrderedStops: TransitStop[] = layer1Stops;
+  const needsSpatialFallback =
+    decodedPolyline.length >= 2 &&
+    (layer1Stops.length === 0 ||
+      (expectedIntermediates > 0 && layer1Stops.length < expectedIntermediates));
 
-  if (boardIndex === -1 || alightIndex === -1 || boardIndex === alightIndex) {
-    return [];
+  if (needsSpatialFallback) {
+    const spatialStops = resolveIntermediateStopsAlongPolyline(
+      decodedPolyline,
+      catalog.allStops,
+      {
+        lineId: normalizedLineId,
+        depStopRaw,
+        arrStopRaw,
+        expectedCount: expectedIntermediates > 0 ? expectedIntermediates : undefined,
+      }
+    );
+
+    if (spatialStops.length > layer1Stops.length) {
+      finalOrderedStops = spatialStops;
+    } else if (layer1Stops.length === 0) {
+      finalOrderedStops = spatialStops;
+    }
   }
 
-  const orderedIntermediates: TransitStop[] =
-    boardIndex < alightIndex
-      ? line.stops.slice(boardIndex + 1, alightIndex)
-      : line.stops.slice(alightIndex + 1, boardIndex).reverse();
-
-  if (orderedIntermediates.length === 0) {
+  if (finalOrderedStops.length === 0) {
     return [];
   }
 
   const totalMs = Math.max(0, arrDate.getTime() - depDate.getTime());
-  const totalIntervals = orderedIntermediates.length + 1;
+  const totalIntervals = finalOrderedStops.length + 1;
 
-  return orderedIntermediates.map((stop, idx) => {
+  return finalOrderedStops.map((stop, idx) => {
     const estimatedDate = new Date(
       depDate.getTime() + Math.round((totalMs * (idx + 1)) / totalIntervals)
     );
@@ -457,8 +706,45 @@ export function resolveIntermediateStopsForTransitLeg(
   });
 }
 
+/**
+ * Backward-compatible wrapper around `resolveIntermediateStops`.
+ */
+export function resolveIntermediateStopsForTransitLeg(
+  lineId: string,
+  depStopRaw: GoogleTransitStop | undefined,
+  arrStopRaw: GoogleTransitStop | undefined,
+  depDate: Date,
+  arrDate: Date,
+  activeControllers: Report[] = reportService.getActiveControllerReports(),
+  linesCatalog?: TransitLine[]
+): IntermediateStopInfo[] {
+  const catalog: DiviaCatalogData = linesCatalog
+    ? {
+        version: 1,
+        generatedAt: Date.now(),
+        source: 'local_seed',
+        lines: linesCatalog.map(l => ({
+          id: normalizeDiviaLineCode(l.id),
+          name: l.name,
+          stops: l.stops,
+        })),
+        allStops: diviaCatalogService.getAllStopsSync(),
+      }
+    : diviaCatalogService.getCatalogSync();
+
+  return resolveIntermediateStops({
+    lineId,
+    depStopRaw,
+    arrStopRaw,
+    depDate,
+    arrDate,
+    activeControllers,
+    catalog,
+  });
+}
+
 function resolveDiviaLineColor(lineShortName: string, googleColor?: string): string {
-  const normalized = lineShortName.toUpperCase().trim();
+  const normalized = normalizeDiviaLineCode(lineShortName) || lineShortName.toUpperCase().trim();
   const known = DIJON_LINES.find(l => l.id === normalized);
   if (known) return known.color;
   if (googleColor && /^#[0-9A-Fa-f]{6}$/.test(googleColor)) {
@@ -675,13 +961,14 @@ export function mapGoogleRouteToRouteOption(
       const depStopRaw = td.stopDetails?.departureStop;
       const arrStopRaw = td.stopDetails?.arrivalStop;
 
-      const lineShort = (
+      const rawLineShort = (
         td.transitLine?.nameShort ||
         td.transitLine?.name ||
         'DIVIA'
       )
         .toUpperCase()
         .trim();
+      const lineShort = normalizeDiviaLineCode(rawLineShort) || rawLineShort;
       const lineColor = resolveDiviaLineColor(lineShort, td.transitLine?.color);
       const vehicleType = td.transitLine?.vehicle?.type?.toUpperCase() || '';
       const vehicleLabel =
@@ -754,15 +1041,17 @@ export function mapGoogleRouteToRouteOption(
         ? `Direction ${td.headsign}`
         : td.transitLine?.name || `Ligne ${lineShort}`;
 
-      // Reconstruct bidirectional intermediate stops with hybrid fuzzy-name + GPS fallback
-      const intermediateStops = resolveIntermediateStopsForTransitLeg(
-        lineShort,
+      // Double-layer resolution: Layer 1 (Divia line catalog) + Layer 2 (35m spatial polyline matching)
+      const intermediateStops = resolveIntermediateStops({
+        lineId: lineShort,
         depStopRaw,
         arrStopRaw,
         depDate,
         arrDate,
-        activeControllers
-      );
+        stopCount: td.stopCount,
+        decodedPolyline: stepPolyline,
+        activeControllers,
+      });
 
       const intermediateTransitStops: TransitStop[] = intermediateStops.map(st => ({
         id: st.id,

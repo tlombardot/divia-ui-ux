@@ -1,12 +1,18 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { DIJON_LINES } from '../data/dijonNetwork';
 import {
+  normalizeDiviaLineCode,
+  parseOverpassCatalogPayload,
+} from '../services/diviaCatalogService';
+import {
   computeGoogleTransitRoutes,
   decodeGooglePolyline,
   decodeGooglePolylineLatLng,
   GoogleRoute,
   mapGoogleRouteToRouteOption,
   normalizeStopNameForMatching,
+  resolveIntermediateStops,
+  resolveIntermediateStopsAlongPolyline,
   resolveIntermediateStopsForTransitLeg,
   resolveStopIndexOnLine,
 } from '../services/googleTransitService';
@@ -579,5 +585,170 @@ describe('GoogleTransitService — Polyline decoding, TransitDetails mapping & W
     const secondarySeg = option.segments[1];
     expect(secondarySeg.intermediateStops).toEqual([]);
     expect(secondarySeg.stopsCount).toBe(5);
+  });
+
+  it('normalizes all Divia line codes returned by Google Routes API and Overpass', () => {
+    expect(normalizeDiviaLineCode('T1')).toBe('T1');
+    expect(normalizeDiviaLineCode('Tramway T2')).toBe('T2');
+    expect(normalizeDiviaLineCode('3')).toBe('L3');
+    expect(normalizeDiviaLineCode('L3')).toBe('L3');
+    expect(normalizeDiviaLineCode('5')).toBe('L5');
+    expect(normalizeDiviaLineCode('Liane 5')).toBe('L5');
+    expect(normalizeDiviaLineCode('10')).toBe('B10');
+    expect(normalizeDiviaLineCode('B10')).toBe('B10');
+    expect(normalizeDiviaLineCode('12')).toBe('B12');
+    expect(normalizeDiviaLineCode('Bus 13')).toBe('B13');
+    expect(normalizeDiviaLineCode('Corol')).toBe('COROL');
+    expect(normalizeDiviaLineCode('Navette City')).toBe('CITY');
+  });
+
+  it('parses Overpass Divia route relations and named bus/tram stops into the catalog', () => {
+    const parsed = parseOverpassCatalogPayload({
+      elements: [
+        { type: 'node', id: 1001, lat: 47.3235, lon: 5.0335, tags: { name: 'Darcy', highway: 'bus_stop' } },
+        { type: 'node', id: 1002, lat: 47.3224, lon: 5.0369, tags: { name: 'Grangier', highway: 'bus_stop' } },
+        { type: 'node', id: 1003, lat: 47.3219, lon: 5.0398, tags: { name: 'Miroir', highway: 'bus_stop' } },
+        { type: 'node', id: 1004, lat: 47.3211, lon: 5.0414, tags: { name: 'Libération', highway: 'bus_stop' } },
+        {
+          type: 'relation',
+          id: 2001,
+          tags: { type: 'route', route: 'bus', network: 'DiviaMobilités', ref: 'B18', name: 'Bus B18' },
+          members: [
+            { type: 'node', ref: 1001, role: 'platform' },
+            { type: 'node', ref: 1002, role: 'platform' },
+            { type: 'node', ref: 1003, role: 'platform' },
+            { type: 'node', ref: 1004, role: 'platform' },
+          ],
+        },
+      ],
+    });
+
+    const lineB18 = parsed.lines.find(l => l.id === 'B18');
+    expect(lineB18).toBeDefined();
+    expect(lineB18?.stops.map(s => s.name)).toEqual(['Darcy', 'Grangier', 'Miroir', 'Libération']);
+  });
+
+  it('resolves bus B10/B12 real stop names (including numeric Google code "12") in both directions', () => {
+    const depDate = new Date(2026, 10, 18, 11, 0, 0);
+    const arrDate = new Date(2026, 10, 18, 11, 15, 0);
+
+    const b12Line = DIJON_LINES.find(l => l.id === 'B12');
+    expect(b12Line).toBeDefined();
+    if (!b12Line || b12Line.stops.length < 4) return;
+
+    const firstStop = b12Line.stops[0];
+    const lastStop = b12Line.stops[b12Line.stops.length - 1];
+
+    // Forward direction using bare numeric code "12" from Google Routes API
+    const forwardStops = resolveIntermediateStops({
+      lineId: '12',
+      depStopRaw: {
+        name: firstStop.name,
+        location: { latLng: { latitude: firstStop.latitude, longitude: firstStop.longitude } },
+      },
+      arrStopRaw: {
+        name: lastStop.name,
+        location: { latLng: { latitude: lastStop.latitude, longitude: lastStop.longitude } },
+      },
+      depDate,
+      arrDate,
+      stopCount: b12Line.stops.length - 1,
+      activeControllers: [],
+    });
+
+    const expectedForwardNames = b12Line.stops.slice(1, -1).map(s => s.name);
+    expect(forwardStops.map(s => s.name)).toEqual(expectedForwardNames);
+    expect(forwardStops.every(s => /^\d{2}:\d{2}$/.test(s.estimatedTime))).toBe(true);
+
+    // Reverse direction on B12
+    const reverseStops = resolveIntermediateStops({
+      lineId: 'B12',
+      depStopRaw: {
+        name: lastStop.name,
+        location: { latLng: { latitude: lastStop.latitude, longitude: lastStop.longitude } },
+      },
+      arrStopRaw: {
+        name: firstStop.name,
+        location: { latLng: { latitude: firstStop.latitude, longitude: firstStop.longitude } },
+      },
+      depDate,
+      arrDate,
+      stopCount: b12Line.stops.length - 1,
+      activeControllers: [],
+    });
+
+    expect(reverseStops.map(s => s.name)).toEqual([...expectedForwardNames].reverse());
+  });
+
+  it('extracts real ordered stop names via Layer 2 spatial polyline matching (<35m) when line is absent from line catalog', () => {
+    const depDate = new Date(2026, 10, 18, 17, 0, 0);
+    const arrDate = new Date(2026, 10, 18, 17, 12, 0);
+
+    // Polyline passing directly through Darcy -> Grangier -> Miroir -> Libération (simulating uncatalogued line B19)
+    const polylineCoords: [number, number][] = [
+      [47.3235, 5.0335], // Darcy (departure)
+      [47.3224, 5.0369], // Grangier (intermediate 1)
+      [47.3219, 5.0398], // Miroir (intermediate 2)
+      [47.3211, 5.0414], // Libération (arrival)
+    ];
+
+    const spatial = resolveIntermediateStopsAlongPolyline(
+      polylineCoords,
+      [
+        { id: 'hub-darcy', name: 'Darcy', latitude: 47.3235, longitude: 5.0335, lines: ['B19'] },
+        { id: 'divia-miroir', name: 'Miroir', latitude: 47.32195, longitude: 5.03985, lines: ['B19'] },
+        { id: 'divia-grangier', name: 'Grangier', latitude: 47.32242, longitude: 5.03692, lines: ['B19'] },
+        { id: 'far-away', name: 'Arrêt Hors Trajet', latitude: 47.3500, longitude: 5.0900, lines: ['B19'] },
+        { id: 'divia-liberation', name: 'Libération', latitude: 47.3211, longitude: 5.0414, lines: ['B19'] },
+      ],
+      {
+        lineId: 'B19',
+        depStopRaw: { name: 'Darcy', location: { latLng: { latitude: 47.3235, longitude: 5.0335 } } },
+        arrStopRaw: { name: 'Libération', location: { latLng: { latitude: 47.3211, longitude: 5.0414 } } },
+        expectedCount: 2,
+      }
+    );
+
+    // Must be sorted strictly along polyline progression (Grangier before Miroir), excluding far-away & endpoints
+    expect(spatial.map(s => s.name)).toEqual(['Grangier', 'Miroir']);
+
+    // End-to-end via mapGoogleRouteToRouteOption for uncatalogued line "19" (normalized to B19)
+    const encodedPoly = encodeGooglePolyline(polylineCoords);
+    const routeWithUnknownLine: GoogleRoute = {
+      duration: '720s',
+      distanceMeters: 900,
+      legs: [
+        {
+          duration: '720s',
+          distanceMeters: 900,
+          steps: [
+            {
+              travelMode: 'TRANSIT',
+              staticDuration: '720s',
+              distanceMeters: 900,
+              polyline: { encodedPolyline: encodedPoly },
+              transitDetails: {
+                headsign: 'Centre Ville',
+                stopCount: 3,
+                transitLine: { name: 'Bus 19', nameShort: '19', color: '#0066AA', vehicle: { type: 'BUS' } },
+                stopDetails: {
+                  departureStop: { name: 'Place Darcy', location: { latLng: { latitude: 47.3235, longitude: 5.0335 } } },
+                  arrivalStop: { name: 'Libération', location: { latLng: { latitude: 47.3211, longitude: 5.0414 } } },
+                  departureTime: depDate.toISOString(),
+                  arrivalTime: arrDate.toISOString(),
+                },
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const mapped = mapGoogleRouteToRouteOption(routeWithUnknownLine, 0, depDate);
+    expect(mapped).not.toBeNull();
+    const seg = mapped!.segments[0];
+    expect(seg.lineId).toBe('B19');
+    expect(seg.intermediateStops?.map(s => s.name)).toEqual(['Grangier', 'Miroir']);
+    expect(seg.intermediateStops?.map(s => s.estimatedTime)).toEqual(['17:04', '17:08']);
   });
 });

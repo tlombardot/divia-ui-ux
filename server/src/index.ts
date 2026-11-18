@@ -13,6 +13,7 @@ import {
   getStopById,
 } from './data/dijonNetwork';
 import { buildStationPredictiveAlerts } from './services/controllerTrackerService';
+import { diviaCatalogService } from './services/diviaCatalogService';
 import { autocompletePlaces, getPlaceDetails } from './services/googlePlacesService';
 import { computeGoogleTransitRoutes } from './services/googleTransitService';
 import { networkGeometryService } from './services/networkGeometryService';
@@ -513,6 +514,7 @@ if (process.env.NODE_ENV !== 'test') {
   }, 20000);
 
   networkGeometryService.warmupCache();
+  diviaCatalogService.warmupCatalog();
   server.listen(PORT, HOST, () => {
     console.log(`[DiviAkhaaa Server] listening on http://${HOST}:${PORT}`);
     console.log(`[DiviAkhaaa Server] Health check available at http://127.0.0.1:${PORT}/health`);
