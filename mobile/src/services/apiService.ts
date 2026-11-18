@@ -9,21 +9,40 @@ import {
   TransitLine,
 } from '../types';
 
+export const DEFAULT_API_TIMEOUT_MS = 8000;
+
+/**
+ * Headers required to transparently bypass interstitial warning pages
+ * returned by localtunnel (*.loca.lt) and ngrok (*.ngrok-free.app).
+ */
+export const TUNNEL_BYPASS_HEADERS: Readonly<Record<string, string>> = {
+  'Bypass-Tunnel-Reminder': 'true',
+  'ngrok-skip-browser-warning': 'true',
+};
+
+/**
+ * Cleans an API base URL by trimming whitespace and stripping trailing slashes.
+ */
+export function cleanApiUrl(rawUrl: string): string {
+  return rawUrl.trim().replace(/\/+$/, '');
+}
+
 /**
  * Hybrid connection resolver:
- * 1. Checks EXPO_PUBLIC_API_URL if configured
+ * 1. Checks EXPO_PUBLIC_API_URL if configured (trimmed, without trailing slash)
  * 2. Dynamically extracts local machine IP from Constants.expoConfig?.hostUri
  *    to work automatically in Expo Go on physical phones without hardcoding.
- * 3. Falls back to localhost:3000
+ * 3. Falls back to http://localhost:3000
  */
 export function getBaseApiUrl(): string {
-  if (process.env.EXPO_PUBLIC_API_URL) {
-    return process.env.EXPO_PUBLIC_API_URL.replace(/\/$/, '');
+  const envUrl = process.env.EXPO_PUBLIC_API_URL;
+  if (envUrl && envUrl.trim().length > 0) {
+    return cleanApiUrl(envUrl);
   }
 
   const hostUri = Constants.expoConfig?.hostUri;
   if (hostUri) {
-    const host = hostUri.split(':')[0];
+    const host = hostUri.split(':')[0]?.trim();
     if (host) {
       return `http://${host}:3000`;
     }
@@ -32,9 +51,88 @@ export function getBaseApiUrl(): string {
   return 'http://localhost:3000';
 }
 
+export function buildApiDiagnosticMessage(
+  baseUrl: string,
+  error?: unknown,
+  httpStatus?: number
+): string {
+  if (typeof httpStatus === 'number') {
+    if (httpStatus === 502 || httpStatus === 503 || httpStatus === 504) {
+      return `Serveur injoignable sur ${baseUrl} (HTTP ${httpStatus}) — Vérifie que npm run dev tourne sur le port 3000 et que le tunnel pointe vers 127.0.0.1:3000`;
+    }
+    return `Erreur API (HTTP ${httpStatus}) sur ${baseUrl}`;
+  }
+
+  if (error instanceof Error && error.name === 'AbortError') {
+    return `Serveur injoignable sur ${baseUrl} (délai d'attente dépassé : ${DEFAULT_API_TIMEOUT_MS / 1000}s) — Vérifie que npm run dev tourne sur le port 3000`;
+  }
+
+  if (error instanceof Error && error.message) {
+    if (error.message.includes(baseUrl)) {
+      return error.message;
+    }
+    return `Serveur injoignable sur ${baseUrl} (${error.message}) — Vérifie que npm run dev tourne sur le port 3000`;
+  }
+
+  return `Serveur injoignable sur ${baseUrl} — Vérifie que npm run dev tourne sur le port 3000`;
+}
+
 export class ApiService {
+  private lastErrorMessage: string | null = null;
+
   private get baseUrl(): string {
     return getBaseApiUrl();
+  }
+
+  public getLastError(): string | null {
+    return this.lastErrorMessage;
+  }
+
+  private async requestWithTimeout(
+    path: string,
+    init: RequestInit = {},
+    timeoutMs: number = DEFAULT_API_TIMEOUT_MS
+  ): Promise<Response> {
+    const baseUrl = this.baseUrl;
+    const url = `${baseUrl}${path}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    const mergedHeaders: Record<string, string> = {
+      Accept: 'application/json',
+      ...TUNNEL_BYPASS_HEADERS,
+      ...((init.headers as Record<string, string> | undefined) ?? {}),
+    };
+
+    try {
+      const response = await fetch(url, {
+        ...init,
+        signal: controller.signal,
+        headers: mergedHeaders,
+      });
+
+      if (!response.ok) {
+        const message = buildApiDiagnosticMessage(baseUrl, undefined, response.status);
+        this.lastErrorMessage = message;
+        throw new Error(message);
+      }
+
+      const contentType = response.headers?.get?.('content-type') ?? '';
+      if (contentType.includes('text/html')) {
+        const message = `Réponse HTML inattendue sur ${baseUrl} (page d'avertissement tunnel/proxy) — Vérifie EXPO_PUBLIC_API_URL et que npm run dev tourne sur le port 3000`;
+        this.lastErrorMessage = message;
+        throw new Error(message);
+      }
+
+      this.lastErrorMessage = null;
+      return response;
+    } catch (error) {
+      const message = buildApiDiagnosticMessage(baseUrl, error);
+      this.lastErrorMessage = message;
+      throw new Error(message);
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   public async fetchRoutes(
@@ -46,18 +144,11 @@ export class ApiService {
     toLabel?: string
   ): Promise<RouteOption[]> {
     try {
-      let url = `${this.baseUrl}/api/routes?fromLat=${fromLat}&fromLng=${fromLng}&toLat=${toLat}&toLng=${toLng}`;
-      if (fromLabel) url += `&fromLabel=${encodeURIComponent(fromLabel)}`;
-      if (toLabel) url += `&toLabel=${encodeURIComponent(toLabel)}`;
+      let path = `/api/routes?fromLat=${fromLat}&fromLng=${fromLng}&toLat=${toLat}&toLng=${toLng}`;
+      if (fromLabel) path += `&fromLabel=${encodeURIComponent(fromLabel)}`;
+      if (toLabel) path += `&toLabel=${encodeURIComponent(toLabel)}`;
 
-      const response = await fetch(url, {
-        headers: { Accept: 'application/json' },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Erreur réseau (${response.status})`);
-      }
-
+      const response = await this.requestWithTimeout(path);
       const data = (await response.json()) as { routes: RouteOption[] };
       return data.routes || [];
     } catch (error) {
@@ -68,14 +159,7 @@ export class ApiService {
 
   public async fetchNetworkShapes(): Promise<{ version: number; lines: TransitLine[] } | null> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/network/shapes`, {
-        headers: { Accept: 'application/json' },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Erreur réseau (${response.status})`);
-      }
-
+      const response = await this.requestWithTimeout('/api/network/shapes');
       const data = (await response.json()) as { version?: number; lines: TransitLine[] };
       if (!data.lines || data.lines.length === 0) return null;
       return {
@@ -90,20 +174,8 @@ export class ApiService {
 
   public async fetchPlaceAutocomplete(input: string): Promise<PlaceSuggestion[]> {
     try {
-      const url = `${this.baseUrl}/api/places/autocomplete?input=${encodeURIComponent(input)}`;
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1800);
-
-      const response = await fetch(url, {
-        signal: controller.signal,
-        headers: { Accept: 'application/json' },
-      });
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        throw new Error(`Erreur Places autocomplete (${response.status})`);
-      }
-
+      const path = `/api/places/autocomplete?input=${encodeURIComponent(input)}`;
+      const response = await this.requestWithTimeout(path);
       const data = (await response.json()) as { suggestions?: PlaceSuggestion[] };
       return data.suggestions || [];
     } catch (error) {
@@ -114,20 +186,8 @@ export class ApiService {
 
   public async fetchPlaceDetails(placeId: string): Promise<PlaceDetailsResult | null> {
     try {
-      const url = `${this.baseUrl}/api/places/details?placeId=${encodeURIComponent(placeId)}`;
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1800);
-
-      const response = await fetch(url, {
-        signal: controller.signal,
-        headers: { Accept: 'application/json' },
-      });
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        throw new Error(`Erreur Place details (${response.status})`);
-      }
-
+      const path = `/api/places/details?placeId=${encodeURIComponent(placeId)}`;
+      const response = await this.requestWithTimeout(path);
       const data = (await response.json()) as { place?: PlaceDetailsResult };
       return data.place || null;
     } catch (error) {
@@ -138,14 +198,7 @@ export class ApiService {
 
   public async fetchReports(): Promise<Report[]> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/reports`, {
-        headers: { Accept: 'application/json' },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Erreur réseau (${response.status})`);
-      }
-
+      const response = await this.requestWithTimeout('/api/reports');
       const data = (await response.json()) as { reports: Report[] };
       return data.reports || [];
     } catch (error) {
@@ -168,18 +221,13 @@ export class ApiService {
     crowdLevel?: CrowdLevel;
   }): Promise<Report | null> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/reports`, {
+      const response = await this.requestWithTimeout('/api/reports', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Accept: 'application/json',
         },
         body: JSON.stringify(payload),
       });
-
-      if (!response.ok) {
-        throw new Error(`Erreur lors de la création du signalement (${response.status})`);
-      }
 
       const data = (await response.json()) as { report: Report };
       return data.report;
@@ -195,11 +243,10 @@ export class ApiService {
     recalibrateStopId?: string
   ): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/reports/vote`, {
+      const response = await this.requestWithTimeout('/api/reports/vote', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Accept: 'application/json',
         },
         body: JSON.stringify({ reportId, voteType, recalibrateStopId }),
       });

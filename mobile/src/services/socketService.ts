@@ -1,6 +1,21 @@
-import { io, Socket } from 'socket.io-client';
+import { io, ManagerOptions, Socket, SocketOptions } from 'socket.io-client';
 import { Report } from '../types';
-import { getBaseApiUrl } from './apiService';
+import {
+  DEFAULT_API_TIMEOUT_MS,
+  getBaseApiUrl,
+  TUNNEL_BYPASS_HEADERS,
+} from './apiService';
+
+export function buildSocketOptions(): Partial<ManagerOptions & SocketOptions> {
+  return {
+    transports: ['websocket', 'polling'],
+    extraHeaders: { ...TUNNEL_BYPASS_HEADERS },
+    reconnection: true,
+    reconnectionAttempts: 10,
+    reconnectionDelay: 2000,
+    timeout: DEFAULT_API_TIMEOUT_MS,
+  };
+}
 
 class SocketService {
   private socket: Socket | null = null;
@@ -13,11 +28,12 @@ class SocketService {
     if (this.socket) return;
 
     const url = getBaseApiUrl();
-    this.socket = io(url, {
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 5,
-      reconnectionDelay: 2000,
-      timeout: 10000,
+    this.socket = io(url, buildSocketOptions());
+
+    this.socket.on('connect_error', (err: Error) => {
+      console.warn(
+        `[SocketService] Connexion temps réel impossible sur ${url} (${err.message}) — Vérifie que npm run dev tourne sur le port 3000`
+      );
     });
 
     this.socket.on('reports:sync', (reports: Report[]) => {
