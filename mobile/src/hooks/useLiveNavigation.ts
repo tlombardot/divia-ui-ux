@@ -1,9 +1,15 @@
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { calculateDistanceMeters, DARCY_HUB, DIJON_CENTER } from '../data/dijonNetwork';
+import {
+  calculateBearing,
+  calculateDistanceMeters,
+  DARCY_HUB,
+  DIJON_CENTER,
+} from '../data/dijonNetwork';
 import { storageService } from '../services/storageService';
 import { RouteOption, RouteSegment, UserLocation } from '../types';
+import { generateSmoothTrajectory } from '../utils/trajectoryUtils';
 
 export type NavState =
   | 'IDLE'
@@ -34,7 +40,11 @@ export function useLiveNavigation() {
     isDemoMode: true,
   });
 
+  const lastLocationRef = useRef<UserLocation>(currentLocation);
+  lastLocationRef.current = currentLocation;
+
   const locationSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
+  const headingSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
   const simulationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ---------------------------------------------------------------------------
@@ -295,17 +305,33 @@ export function useLiveNavigation() {
 
             // Bascule sur Darcy si testeur à > 15 km
             if (dist > DIJON_MAX_DISTANCE_METERS) {
-              setCurrentLocation({
+              setCurrentLocation(prev => ({
+                ...prev,
                 latitude: DARCY_HUB.latitude,
                 longitude: DARCY_HUB.longitude,
                 isDemoMode: true,
-                heading: position.coords.heading,
-              });
+                heading: position.coords.heading ?? prev.heading,
+              }));
             } else {
+              const posLat = position.coords.latitude;
+              const posLon = position.coords.longitude;
+              let heading: number | null | undefined = position.coords.heading;
+
+              // Si le heading natif n'est pas fourni (< 0 ou null), calculer le cap par rapport à la position précédente
+              if (heading === null || heading === undefined || heading < 0) {
+                const prev = lastLocationRef.current;
+                const moved = calculateDistanceMeters(prev.latitude, prev.longitude, posLat, posLon);
+                if (moved >= 2) {
+                  heading = calculateBearing(prev.latitude, prev.longitude, posLat, posLon);
+                } else {
+                  heading = prev.heading;
+                }
+              }
+
               processLocationUpdate({
-                latitude: position.coords.latitude,
-                longitude: position.coords.longitude,
-                heading: position.coords.heading,
+                latitude: posLat,
+                longitude: posLon,
+                heading,
               });
             }
           }
@@ -327,6 +353,53 @@ export function useLiveNavigation() {
       }
     };
   }, [processLocationUpdate, isSimulating]);
+
+  // ---------------------------------------------------------------------------
+  // Suivi en temps réel de la boussole physique du smartphone (orientation de la flèche)
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    let isMounted = true;
+
+    async function startCompassTracking() {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+
+        const sub = await Location.watchHeadingAsync(headingObj => {
+          if (!isMounted || isSimulating) return;
+          const h =
+            headingObj.trueHeading >= 0
+              ? headingObj.trueHeading
+              : headingObj.magHeading;
+
+          if (h >= 0) {
+            const rounded = Math.round(h);
+            setCurrentLocation(prev => {
+              if (prev.heading === rounded) return prev;
+              return {
+                ...prev,
+                heading: rounded,
+              };
+            });
+          }
+        });
+
+        headingSubscriptionRef.current = sub;
+      } catch (e) {
+        console.warn('[useLiveNavigation] Erreur subscription boussole:', e);
+      }
+    }
+
+    startCompassTracking();
+
+    return () => {
+      isMounted = false;
+      if (headingSubscriptionRef.current) {
+        headingSubscriptionRef.current.remove();
+        headingSubscriptionRef.current = null;
+      }
+    };
+  }, [isSimulating]);
 
   // ---------------------------------------------------------------------------
   // Restauration de session depuis AsyncStorage
@@ -363,6 +436,20 @@ export function useLiveNavigation() {
 
     setNavState(initialNavState);
 
+    // Initialise le cap le long des premiers mètres du trajet si disponible
+    if (route.fullPolyline && route.fullPolyline.length >= 2) {
+      const initialBearing = calculateBearing(
+        route.fullPolyline[0][0],
+        route.fullPolyline[0][1],
+        route.fullPolyline[1][0],
+        route.fullPolyline[1][1]
+      );
+      setCurrentLocation(prev => ({
+        ...prev,
+        heading: initialBearing,
+      }));
+    }
+
     storageService.saveActiveNavigation({
       activeRoute: route,
       currentSegmentIndex: 0,
@@ -394,29 +481,33 @@ export function useLiveNavigation() {
 
     setIsSimulating(true);
     let index = 0;
-    const polyline = activeRoute.fullPolyline;
+    // Subdivise la polyline en sous-étapes métriques rapprochées (tous les 2.5m)
+    // pour un déplacement GPS continu, réaliste et sans à-coups
+    const trajectory = generateSmoothTrajectory(activeRoute.fullPolyline, 2.5);
+    if (trajectory.length === 0) return;
 
     if (simulationTimerRef.current) clearInterval(simulationTimerRef.current);
 
     simulationTimerRef.current = setInterval(() => {
-      if (index >= polyline.length) {
+      if (index >= trajectory.length) {
         if (simulationTimerRef.current) clearInterval(simulationTimerRef.current);
         setIsSimulating(false);
         setNavState('ARRIVED');
         return;
       }
 
-      const [lat, lon] = polyline[index];
-      const progress = index / (polyline.length - 1);
+      const point = trajectory[index];
+      const progress = index / Math.max(1, trajectory.length - 1);
       setSimulationProgress(progress);
 
       processLocationUpdate({
-        latitude: lat,
-        longitude: lon,
+        latitude: point.latitude,
+        longitude: point.longitude,
+        heading: point.heading,
       });
 
       index++;
-    }, 1200); // Avance d'un point toutes les 1.2s pour une simulation fluide
+    }, 140); // 140ms par pas de 2.5m : glissement continu et naturel de guidage GPS
   }, [activeRoute, processLocationUpdate]);
 
   const stopSimulation = useCallback(() => {

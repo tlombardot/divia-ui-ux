@@ -29,6 +29,7 @@ import { useReports } from './src/hooks/useReports';
 import { apiService } from './src/services/apiService';
 import { COLORS } from './src/theme/colors';
 import { GeocodedAddress, Report, RouteOption, TransitLine, TransitStop } from './src/types';
+import { animateCameraToUser } from './src/utils/mapCameraUtils';
 
 type UiScreenMode = 'explore' | 'station' | 'directions' | 'timeline';
 
@@ -302,19 +303,57 @@ export default function App() {
     if (!selectedRoute) return;
     startNavigation(selectedRoute);
     setIsFollowingUser(true);
-  }, [selectedRoute, startNavigation]);
+    animateCameraToUser(mapRef, {
+      latitude: effectiveUserLocation.latitude,
+      longitude: effectiveUserLocation.longitude,
+      heading: effectiveUserLocation.heading,
+      duration: 800,
+      isNavigating: true,
+    });
+  }, [
+    selectedRoute,
+    startNavigation,
+    effectiveUserLocation.latitude,
+    effectiveUserLocation.longitude,
+    effectiveUserLocation.heading,
+  ]);
+
+  // Suivi continu de la position de l'utilisateur style Google Maps pendant la navigation
+  useEffect(() => {
+    if (!isNavigating || !isFollowingUser || !mapRef.current) return;
+    animateCameraToUser(mapRef, {
+      latitude: effectiveUserLocation.latitude,
+      longitude: effectiveUserLocation.longitude,
+      heading: effectiveUserLocation.heading,
+      duration: isSimulating ? 180 : 350,
+      isNavigating: true,
+    });
+  }, [
+    isNavigating,
+    isFollowingUser,
+    isSimulating,
+    effectiveUserLocation.latitude,
+    effectiveUserLocation.longitude,
+    effectiveUserLocation.heading,
+  ]);
 
   const handleRecenter = useCallback(() => {
     if (mapRef.current) {
-      mapRef.current.animateToRegion({
+      animateCameraToUser(mapRef, {
         latitude: effectiveUserLocation.latitude,
         longitude: effectiveUserLocation.longitude,
-        latitudeDelta: 0.014,
-        longitudeDelta: 0.014,
+        heading: effectiveUserLocation.heading,
+        duration: 500,
+        isNavigating,
       });
       setIsFollowingUser(true);
     }
-  }, [effectiveUserLocation.latitude, effectiveUserLocation.longitude]);
+  }, [
+    effectiveUserLocation.latitude,
+    effectiveUserLocation.longitude,
+    effectiveUserLocation.heading,
+    isNavigating,
+  ]);
 
   // "Centrer sur la ligne" from LineFilterSheet
   const handleFocusLine = useCallback(
@@ -384,6 +423,7 @@ export default function App() {
           selectedStopId={selectedStop?.id}
           showControllersOnly={showControllersOnly}
           isFollowingUser={isFollowingUser}
+          isNavigating={isNavigating}
           floatingBottomOffset={floatingBottomOffset}
           hideFloatingButtons={!isNavigating && sheetSnap === 'full'}
           onSelectReport={report => setActiveReportCard(report)}
@@ -524,6 +564,13 @@ export default function App() {
               stopNavigation();
               setUiMode('explore');
               setSheetSnap('peek');
+              setIsFollowingUser(true);
+              animateCameraToUser(mapRef, {
+                latitude: effectiveUserLocation.latitude,
+                longitude: effectiveUserLocation.longitude,
+                duration: 600,
+                isNavigating: false,
+              });
             }}
           />
         )}

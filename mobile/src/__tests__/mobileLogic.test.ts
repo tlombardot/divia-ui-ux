@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  calculateBearing,
   calculateDistanceMeters,
   DARCY_HUB,
   DIJON_CENTER,
@@ -9,6 +10,7 @@ import {
 } from '../data/dijonNetwork';
 import { geocodingService } from '../services/geocodingService';
 import { apiService, getBaseApiUrl } from '../services/apiService';
+import { generateSmoothTrajectory, interpolateAngle } from '../utils/trajectoryUtils';
 
 describe('Mobile Logic & Network Calculations', () => {
   it('correctly calculates distance between Darcy and Dijon Center', () => {
@@ -20,6 +22,56 @@ describe('Mobile Logic & Network Calculations', () => {
     );
     expect(dist).toBeGreaterThan(500);
     expect(dist).toBeLessThan(1000);
+  });
+
+  it('correctly calculates cardinal bearings (North, East, South, West)', () => {
+    // North: lat increases, lon constant
+    const bearingNorth = calculateBearing(47.32, 5.04, 47.33, 5.04);
+    expect(bearingNorth).toBe(0);
+
+    // East: lat constant, lon increases
+    const bearingEast = calculateBearing(47.32, 5.04, 47.32, 5.05);
+    expect(bearingEast).toBe(90);
+
+    // South: lat decreases, lon constant
+    const bearingSouth = calculateBearing(47.32, 5.04, 47.31, 5.04);
+    expect(bearingSouth).toBe(180);
+
+    // West: lat constant, lon decreases
+    const bearingWest = calculateBearing(47.32, 5.04, 47.32, 5.03);
+    expect(bearingWest).toBe(270);
+  });
+
+  it('smoothly interpolates angles across the 0/360 degree boundary', () => {
+    // Turning from 350° to 10°: shortest path is +20° clockwise, midpoint is 0° (or 360°)
+    const mid = interpolateAngle(350, 10, 0.5);
+    expect(mid === 0 || mid === 360).toBe(true);
+
+    // Quarter turn
+    const quarter = interpolateAngle(0, 90, 0.5);
+    expect(quarter).toBe(45);
+  });
+
+  it('generates high-density, smooth trajectories with consistent bearings', () => {
+    // 2 sparse points ~111m apart
+    const sparsePolyline: [number, number][] = [
+      [47.3235, 5.0335],
+      [47.3245, 5.0335],
+    ];
+
+    const smooth = generateSmoothTrajectory(sparsePolyline, 3);
+    // 111m / 3m = ~37 points + final point
+    expect(smooth.length).toBeGreaterThanOrEqual(30);
+
+    // All intermediate points should face North (0°)
+    expect(smooth[0].heading).toBe(0);
+    expect(smooth[Math.floor(smooth.length / 2)].heading).toBe(0);
+
+    // First and last coordinates match exactly
+    expect(smooth[0].latitude).toBeCloseTo(47.3235, 4);
+    expect(smooth[0].longitude).toBeCloseTo(5.0335, 4);
+    expect(smooth[smooth.length - 1].latitude).toBeCloseTo(47.3245, 4);
+    expect(smooth[smooth.length - 1].longitude).toBeCloseTo(5.0335, 4);
   });
 
   it('covers the entire Grand Dijon agglomeration within 25 km radius', () => {

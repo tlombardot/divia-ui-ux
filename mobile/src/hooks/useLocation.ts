@@ -73,6 +73,49 @@ export function useLocation() {
     fetchLocation();
   }, [fetchLocation]);
 
+  // Suivi en temps réel de la boussole physique du smartphone (orientation / cap)
+  useEffect(() => {
+    let isMounted = true;
+    let headingSub: Location.LocationSubscription | null = null;
+
+    async function startCompassTracking() {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+
+        headingSub = await Location.watchHeadingAsync(headingObj => {
+          if (!isMounted) return;
+          const h =
+            headingObj.trueHeading >= 0
+              ? headingObj.trueHeading
+              : headingObj.magHeading;
+
+          if (h >= 0) {
+            const rounded = Math.round(h);
+            setLocation(prev => {
+              if (prev.heading === rounded) return prev;
+              return {
+                ...prev,
+                heading: rounded,
+              };
+            });
+          }
+        });
+      } catch (err) {
+        console.warn('[useLocation] Boussole non disponible ou erreur:', err);
+      }
+    }
+
+    startCompassTracking();
+
+    return () => {
+      isMounted = false;
+      if (headingSub) {
+        headingSub.remove();
+      }
+    };
+  }, []);
+
   return {
     location,
     isDemoMode: location.isDemoMode,
