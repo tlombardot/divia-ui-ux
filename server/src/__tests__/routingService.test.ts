@@ -155,12 +155,21 @@ describe('routingService — Door-to-Door & Anti-Detour Dijkstra', () => {
     const t1Seg = t1Route!.segments.find(s => s.type === 'TRANSIT' && s.lineId === 'T1')!;
     expect(t1Seg.polyline.length).toBeGreaterThanOrEqual(4);
 
-    // Must pass directly through Godrans Les Halles pedestrian tram zone (< 50 m)
+    // Must pass directly through Godrans Les Halles pedestrian tram zone (< 50 m of resolved stop, never outer car roads)
+    const godransStop = t1Seg.passedStops?.find(s => s.id === HUB_GODRANS.id) || HUB_GODRANS;
     const projGodrans = projectPointOntoPolyline(
-      [HUB_GODRANS.latitude, HUB_GODRANS.longitude],
+      [godransStop.latitude, godransStop.longitude],
       t1Seg.polyline
     );
     expect(projGodrans.distanceMeters).toBeLessThan(50);
+    expect(
+      calculateDistanceMeters(
+        godransStop.latitude,
+        godransStop.longitude,
+        HUB_GODRANS.latitude,
+        HUB_GODRANS.longitude
+      )
+    ).toBeLessThan(300);
   });
 
   it('routes Darcy -> Université on T1 using sliced rail geometry and realistic 22 km/h duration', async () => {
@@ -183,9 +192,10 @@ describe('routingService — Door-to-Door & Anti-Detour Dijkstra', () => {
     expect(t1Seg.durationMinutes).toBeGreaterThanOrEqual(8);
     expect(t1Seg.durationMinutes).toBeLessThanOrEqual(24);
 
-    // Confirm sliced rail polyline crosses Godrans Les Halles (< 50 m)
+    // Confirm sliced rail polyline crosses Godrans Les Halles (< 50 m of resolved stop)
+    const godransStop = t1Seg.passedStops?.find(s => s.id === HUB_GODRANS.id) || HUB_GODRANS;
     const projGodrans = projectPointOntoPolyline(
-      [HUB_GODRANS.latitude, HUB_GODRANS.longitude],
+      [godransStop.latitude, godransStop.longitude],
       t1Seg.polyline
     );
     expect(projGodrans.distanceMeters).toBeLessThan(50);

@@ -586,6 +586,8 @@ export const TransitMap: React.FC<TransitMapProps> = ({
             style={styles.fabReport}
             onPress={onOpenReportModal}
             activeOpacity={0.85}
+            accessibilityLabel="Signaler des contrôleurs rapidement"
+            accessibilityRole="button"
           >
             <Text style={styles.fabIcon}>🚨</Text>
             {activeControllerReports.length > 0 && (

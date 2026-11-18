@@ -67,7 +67,7 @@ export const RouteTimelineContent: React.FC<RouteTimelineContentProps> = ({
           <View style={styles.alertBanner}>
             <Text style={styles.alertIcon}>🚨</Text>
             <View style={styles.alertTexts}>
-              <Text style={styles.alertTitle}>Alerte contrôleurs Waze sur cet itinéraire</Text>
+              <Text style={styles.alertTitle}>Contrôleurs signalés sur cet itinéraire</Text>
               {route.alerts.map(a => (
                 <Text key={a.id} style={styles.alertSub}>
                   • {a.stopName} ({a.lineId}) — {a.direction}

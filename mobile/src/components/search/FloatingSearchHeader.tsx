@@ -10,9 +10,6 @@ interface FloatingSearchHeaderProps {
   visibleLinesCount: number;
   totalLinesCount: number;
   onSelectQuickStop: (stop: TransitStop) => void;
-  showControllersOnly: boolean;
-  onToggleControllersFilter: () => void;
-  activeReportsCount: number;
   isDemoMode: boolean;
 }
 
@@ -31,9 +28,6 @@ export const FloatingSearchHeader: React.FC<FloatingSearchHeaderProps> = ({
   visibleLinesCount,
   totalLinesCount,
   onSelectQuickStop,
-  showControllersOnly,
-  onToggleControllersFilter,
-  activeReportsCount,
   isDemoMode,
 }) => {
   const insets = useSafeAreaInsets();
@@ -74,7 +68,7 @@ export const FloatingSearchHeader: React.FC<FloatingSearchHeaderProps> = ({
         </TouchableOpacity>
       </View>
 
-      {/* Floating Quick Chips + Divia Line Filter + Waze Controller Filter */}
+      {/* Floating Quick Chips + Divia Line Filter */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -90,43 +84,6 @@ export const FloatingSearchHeader: React.FC<FloatingSearchHeaderProps> = ({
           <Text style={styles.lineFilterText}>
             Lignes ({visibleLinesCount}/{totalLinesCount})
           </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[
-            styles.chip,
-            styles.wazeFilterChip,
-            showControllersOnly && styles.wazeFilterChipActive,
-          ]}
-          onPress={onToggleControllersFilter}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.chipEmoji}>🚨</Text>
-          <Text
-            style={[
-              styles.chipText,
-              showControllersOnly && styles.wazeFilterTextActive,
-            ]}
-          >
-            Contrôleurs Waze
-          </Text>
-          {activeReportsCount > 0 && (
-            <View
-              style={[
-                styles.countPill,
-                showControllersOnly && styles.countPillActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.countPillText,
-                  showControllersOnly && styles.countPillTextActive,
-                ]}
-              >
-                {activeReportsCount}
-              </Text>
-            </View>
-          )}
         </TouchableOpacity>
 
         {featuredStops.map(stop => (
@@ -238,10 +195,6 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 4,
   },
-  chipEmoji: {
-    fontSize: 13,
-    marginRight: 5,
-  },
   chipStopDot: {
     fontSize: 8,
     color: COLORS.cassis,
@@ -267,37 +220,5 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     color: '#FFFFFF',
-  },
-  wazeFilterChip: {
-    borderWidth: 1,
-    borderColor: '#FADBD8',
-  },
-  wazeFilterChipActive: {
-    backgroundColor: COLORS.error,
-    borderColor: COLORS.error,
-  },
-  wazeFilterTextActive: {
-    color: '#FFFFFF',
-  },
-  countPill: {
-    backgroundColor: COLORS.error,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginLeft: 6,
-    paddingHorizontal: 4,
-  },
-  countPillActive: {
-    backgroundColor: '#FFFFFF',
-  },
-  countPillText: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '900',
-  },
-  countPillTextActive: {
-    color: COLORS.error,
   },
 });

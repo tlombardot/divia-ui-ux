@@ -7,7 +7,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { LineFilterSheet } from './src/components/map/LineFilterSheet';
 import { TransitMap } from './src/components/map/TransitMap';
 import { ActiveTripBottomSheet } from './src/components/navigation/ActiveTripBottomSheet';
-import { ReportBottomSheet } from './src/components/reports/ReportBottomSheet';
+import { QuickControllerModal } from './src/components/reports/QuickControllerModal';
 import { ReportCard } from './src/components/reports/ReportCard';
 import { DirectionsHeader } from './src/components/search/DirectionsHeader';
 import { FloatingSearchHeader } from './src/components/search/FloatingSearchHeader';
@@ -72,7 +72,6 @@ export default function App() {
   const [uiMode, setUiMode] = useState<UiScreenMode>('explore');
   const [sheetSnap, setSheetSnap] = useState<SheetSnapState>('peek');
   const [selectedStop, setSelectedStop] = useState<TransitStop | null>(null);
-  const [showControllersOnly, setShowControllersOnly] = useState<boolean>(false);
   const [isFollowingUser, setIsFollowingUser] = useState<boolean>(true);
   const [autoFocusDest, setAutoFocusDest] = useState<boolean>(false);
 
@@ -375,16 +374,32 @@ export default function App() {
     [ensureLineVisible]
   );
 
-  // Live Waze Controller Alert during active navigation
+  // Live Controller Alert during active navigation (strictly scoped to active route stops & lines)
   const liveControllerAlert = useMemo(() => {
     if (!isNavigating || !activeRoute) return null;
-    const linesUsed = activeRoute.segments
-      .filter(s => s.type === 'TRANSIT' && s.lineId)
-      .map(s => s.lineId as string);
+    const transitSegments = activeRoute.segments.filter(s => s.type === 'TRANSIT' && s.lineId);
+    if (transitSegments.length === 0) return null;
 
-    const alert = controllerReports.find(
-      r => linesUsed.includes(r.lineId) && r.id !== dismissedAlertId
-    );
+    const linesUsed = new Set(transitSegments.map(s => (s.lineId as string).toUpperCase()));
+    const routeStopIds = new Set<string>();
+    for (const seg of transitSegments) {
+      if (seg.fromStop?.id) routeStopIds.add(seg.fromStop.id);
+      if (seg.toStop?.id) routeStopIds.add(seg.toStop.id);
+      if (seg.passedStops) {
+        for (const st of seg.passedStops) {
+          routeStopIds.add(st.id);
+        }
+      }
+    }
+    const routeAlertIds = new Set(activeRoute.alerts.map(a => a.id));
+
+    const alert = controllerReports.find(r => {
+      if (r.id === dismissedAlertId) return false;
+      const lineMatch = r.lineId === 'ALL' || linesUsed.has(r.lineId.toUpperCase());
+      if (!lineMatch) return false;
+      const currentStopId = r.progression?.currentStopId || r.stopId;
+      return routeAlertIds.has(r.id) || routeStopIds.has(currentStopId);
+    });
     return alert || null;
   }, [isNavigating, activeRoute, controllerReports, dismissedAlertId]);
 
@@ -421,7 +436,7 @@ export default function App() {
             isNavigating ? undefined : expandedTransitSegmentIndices
           }
           selectedStopId={selectedStop?.id}
-          showControllersOnly={showControllersOnly}
+          showControllersOnly={false}
           isFollowingUser={isFollowingUser}
           isNavigating={isNavigating}
           floatingBottomOffset={floatingBottomOffset}
@@ -444,9 +459,6 @@ export default function App() {
             visibleLinesCount={visibleLineIds.length}
             totalLinesCount={totalLinesCount}
             onSelectQuickStop={handleRouteToStop}
-            showControllersOnly={showControllersOnly}
-            onToggleControllersFilter={() => setShowControllersOnly(prev => !prev)}
-            activeReportsCount={controllerReports.length}
             isDemoMode={isDemoMode}
           />
         )}
@@ -591,8 +603,8 @@ export default function App() {
           />
         )}
 
-        {/* Redesigned Divia Waze & Crowd Reporting Bottom Sheet */}
-        <ReportBottomSheet
+        {/* 1-Tap Quick Controller Modal (Nearest Stop by Geolocation) */}
+        <QuickControllerModal
           visible={isReportModalVisible}
           userLocation={effectiveUserLocation}
           initialStop={reportTargetStop}

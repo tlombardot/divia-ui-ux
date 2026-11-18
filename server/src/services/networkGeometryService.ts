@@ -158,6 +158,13 @@ export class NetworkGeometryService {
           );
         });
         if (hasAllRequiredLines) {
+          const hasGoogleKey = Boolean(
+            this.allowExternalFetch && process.env.GOOGLE_MAPS_API_KEY?.trim()
+          );
+          const hasGoogleShape = parsed.lines.some(l => l.shapeSource === 'google_routes');
+          if (hasGoogleKey && !hasGoogleShape) {
+            return null;
+          }
           return parsed;
         }
       }

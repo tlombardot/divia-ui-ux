@@ -19,7 +19,7 @@ import {
   LatLng,
   sliceLineGeometry,
 } from '../utils/geometryTopology';
-import { buildRoutePredictiveAlerts } from './controllerTrackerService';
+import { matchRouteControllerReports } from './controllerTrackerService';
 import { isControllerNearStop } from './googleTransitService';
 import { networkGeometryService } from './networkGeometryService';
 import { getPedestrianRoute, PedestrianRoute } from './pedestrianService';
@@ -170,16 +170,6 @@ function findDirectionalLineSegment(
     distanceMeters,
     durationMinutes,
   };
-}
-
-/**
- * Trouver les signalements contrôleurs Waze actifs sur un trajet
- */
-function findMatchingReports(linesUsed: string[], stopsUsed: string[]): Report[] {
-  const activeReports = reportService.getActiveControllerReports();
-  return activeReports.filter(
-    rep => linesUsed.includes(rep.lineId) || stopsUsed.includes(rep.stopId)
-  );
 }
 
 function crowdRank(level: CrowdLevel): number {
@@ -460,14 +450,13 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
         ];
 
         const directStopIds = lineSeg.stops.map(s => s.id);
-        const matchingAlerts = findMatchingReports([line.id], directStopIds);
-        const predictiveAlerts = buildRoutePredictiveAlerts(
-          [line.id],
-          directStopIds,
-          reportService.getActiveControllerReports(now.getTime()),
-          now.getTime(),
-          networkGeometryService.getCachedLinesSync()
-        );
+        const { matchingAlerts, predictiveAlerts } = matchRouteControllerReports({
+          linesUsed: [line.id],
+          stopIdsUsed: directStopIds,
+          activeControllers: reportService.getActiveControllerReports(now.getTime()),
+          currentTime: now.getTime(),
+          lines: networkGeometryService.getCachedLinesSync(),
+        });
         const { crowdStatus, crowdSummary } = summarizeRouteCrowd(segments);
 
         routes.push({
@@ -677,15 +666,39 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
               ...walkFromAlighting.polyline,
             ];
 
-            const allStops = [...legA.stops, ...legB.stops].map(s => s.id);
-            const matchingAlerts = findMatchingReports([lineA.id, lineB.id], allStops);
-            const predictiveAlerts = buildRoutePredictiveAlerts(
-              [lineA.id, lineB.id],
-              allStops,
-              reportService.getActiveControllerReports(now.getTime()),
-              now.getTime(),
-              networkGeometryService.getCachedLinesSync()
+            const activeControllers = reportService.getActiveControllerReports(now.getTime());
+            const cachedLines = networkGeometryService.getCachedLinesSync();
+            const matchA = matchRouteControllerReports({
+              linesUsed: [lineA.id],
+              stopIdsUsed: legA.stops.map(s => s.id),
+              activeControllers,
+              currentTime: now.getTime(),
+              lines: cachedLines,
+            });
+            const matchB = matchRouteControllerReports({
+              linesUsed: [lineB.id],
+              stopIdsUsed: legB.stops.map(s => s.id),
+              activeControllers,
+              currentTime: now.getTime(),
+              lines: cachedLines,
+            });
+
+            const seenAlertIds = new Set<string>();
+            const matchingAlerts = [...matchA.matchingAlerts, ...matchB.matchingAlerts].filter(
+              a => {
+                if (seenAlertIds.has(a.id)) return false;
+                seenAlertIds.add(a.id);
+                return true;
+              }
             );
+            const seenPredIds = new Set<string>();
+            const predictiveAlerts = [...matchA.predictiveAlerts, ...matchB.predictiveAlerts]
+              .filter(p => {
+                if (seenPredIds.has(p.reportId)) return false;
+                seenPredIds.add(p.reportId);
+                return true;
+              })
+              .sort((a, b) => a.etaMinutes - b.etaMinutes);
             const { crowdStatus, crowdSummary } = summarizeRouteCrowd(segments);
 
             routes.push({

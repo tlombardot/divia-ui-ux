@@ -7,6 +7,7 @@ import {
   CrowdLevel,
   CrowdStatus,
   IntermediateStopInfo,
+  PredictiveAlert,
   Report,
   RouteOption,
   RouteQuery,
@@ -15,7 +16,7 @@ import {
   TransitLine,
   TransitStop,
 } from '../types';
-import { buildRoutePredictiveAlerts } from './controllerTrackerService';
+import { matchRouteControllerReports } from './controllerTrackerService';
 import {
   DiviaCatalogData,
   DiviaCatalogLine,
@@ -802,27 +803,6 @@ function mapSegmentsToSteps(segments: RouteSegment[]): RouteStep[] {
 }
 
 /**
- * Match active Waze CONTROLLER reports against a Google Transit route's lines & stops
- */
-function matchWazeControllerReports(
-  linesUsed: string[],
-  stopIdsUsed: string[],
-  transitPoints: [number, number][]
-): Report[] {
-  const activeControllers = reportService.getActiveControllerReports();
-  const upperLines = new Set(linesUsed.map(l => l.toUpperCase()));
-  const stopIdSet = new Set(stopIdsUsed);
-
-  return activeControllers.filter(rep => {
-    if (upperLines.has(rep.lineId.toUpperCase())) return true;
-    if (stopIdSet.has(rep.stopId)) return true;
-    return transitPoints.some(
-      ([lat, lon]) => calculateDistanceMeters(lat, lon, rep.latitude, rep.longitude) <= 180
-    );
-  });
-}
-
-/**
  * Append decoded coordinates without duplicating consecutive identical points
  */
 function appendPolylineCoords(
@@ -870,8 +850,11 @@ export function mapGoogleRouteToRouteOption(
   const segments: RouteSegment[] = [];
   const fullPolyline: [number, number][] = [];
   const linesUsed: string[] = [];
-  const stopIdsUsed: string[] = [];
-  const transitAnchorPoints: [number, number][] = [];
+  const transitLegsForAlerts: Array<{
+    lineId: string;
+    stopIds: string[];
+    polyline: [number, number][];
+  }> = [];
 
   let walkingDurationSeconds = 0;
   let transitDurationMinutes = 0;
@@ -1015,9 +998,20 @@ export function mapGoogleRouteToRouteOption(
       transitLegCount += 1;
       transitDurationMinutes += stepMinutes;
 
+      const legPolyline: [number, number][] =
+        stepPolyline.length >= 2
+          ? stepPolyline
+          : [
+              [depLat, depLng],
+              [arrLat, arrLng],
+            ];
       linesUsed.push(lineShort);
-      stopIdsUsed.push(depStopId, arrStopId);
-      transitAnchorPoints.push([depLat, depLng], [arrLat, arrLng]);
+      const transitLegForAlertsEntry = {
+        lineId: lineShort,
+        stopIds: [depStopId, arrStopId],
+        polyline: legPolyline,
+      };
+      transitLegsForAlerts.push(transitLegForAlertsEntry);
 
       const depDate = td.stopDetails?.departureTime
         ? new Date(td.stopDetails.departureTime)
@@ -1061,10 +1055,7 @@ export function mapGoogleRouteToRouteOption(
         lines: [lineShort],
       }));
 
-      for (const st of intermediateStops) {
-        stopIdsUsed.push(st.id);
-        transitAnchorPoints.push([st.latitude, st.longitude]);
-      }
+      transitLegForAlertsEntry.stopIds.push(...intermediateStops.map(st => st.id));
 
       const passedStops: TransitStop[] = [fromStop, ...intermediateTransitStops, toStop];
       const departureTimeText =
@@ -1175,17 +1166,33 @@ export function mapGoogleRouteToRouteOption(
         : [];
 
   const transfersCount = Math.max(0, transitLegCount - 1);
-  const matchingAlerts = matchWazeControllerReports(
-    linesUsed,
-    stopIdsUsed,
-    transitAnchorPoints
-  );
-  const predictiveAlerts = buildRoutePredictiveAlerts(
-    linesUsed,
-    stopIdsUsed,
-    reportService.getActiveControllerReports(nowDate.getTime()),
-    nowDate.getTime()
-  );
+  const seenAlertIds = new Set<string>();
+  const seenPredIds = new Set<string>();
+  const matchingAlerts: Report[] = [];
+  const predictiveAlerts: PredictiveAlert[] = [];
+
+  for (const transitLeg of transitLegsForAlerts) {
+    const legMatch = matchRouteControllerReports({
+      linesUsed: [transitLeg.lineId],
+      stopIdsUsed: transitLeg.stopIds,
+      activeControllers,
+      currentTime: nowDate.getTime(),
+      transitSegments: [{ lineId: transitLeg.lineId, polyline: transitLeg.polyline }],
+    });
+    for (const a of legMatch.matchingAlerts) {
+      if (!seenAlertIds.has(a.id)) {
+        seenAlertIds.add(a.id);
+        matchingAlerts.push(a);
+      }
+    }
+    for (const p of legMatch.predictiveAlerts) {
+      if (!seenPredIds.has(p.reportId)) {
+        seenPredIds.add(p.reportId);
+        predictiveAlerts.push(p);
+      }
+    }
+  }
+  predictiveAlerts.sort((a, b) => a.etaMinutes - b.etaMinutes);
 
   // Summarize worst crowd status across all Google Transit legs
   const transitSegsWithCrowd = segments.filter(s => s.type === 'TRANSIT' && s.crowdStatus);
@@ -1371,13 +1378,19 @@ function doesGoogleTransitLineMatch(
   const target = targetLineId.toUpperCase().trim();
   const shortNorm = (nameShort || '').toUpperCase().trim();
   if (shortNorm === target) return true;
+  if (/^B\d+$/.test(target) && shortNorm === target.slice(1)) return true;
 
   const fullNorm = (name || '').toUpperCase().trim();
   if (!fullNorm) return false;
 
-  // Match exact token (e.g. "Bus B12", "Ligne B10", "T1") without confusing B1 with B10
+  // Match exact token (e.g. "Bus B12", "Ligne B10", "T1", "Ligne 10") without confusing B1 with B10
   const regex = new RegExp(`(^|[^A-Z0-9])${target}($|[^A-Z0-9])`);
-  return regex.test(fullNorm);
+  if (regex.test(fullNorm)) return true;
+  if (/^B\d+$/.test(target)) {
+    const numericRegex = new RegExp(`(^|[^A-Z0-9])${target.slice(1)}($|[^A-Z0-9])`);
+    return numericRegex.test(fullNorm);
+  }
+  return false;
 }
 
 /**
@@ -1426,7 +1439,13 @@ export async function fetchGoogleTransitLineChunk(
     });
 
     clearTimeout(timeoutId);
-    if (!response.ok) return null;
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      console.warn(
+        `[GoogleTransitService] Chunk ${lineId} HTTP ${response.status}: ${errText.slice(0, 180)}`
+      );
+      return null;
+    }
 
     const data = (await response.json()) as GoogleComputeRoutesResponse;
     if (!data.routes || data.routes.length === 0) return null;

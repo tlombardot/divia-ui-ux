@@ -4,6 +4,7 @@ import express, { Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import http from 'http';
+import path from 'path';
 import { Server, Socket } from 'socket.io';
 import {
   ALL_DIJON_STOPS,
@@ -35,7 +36,8 @@ import {
 } from './types';
 import { ALLOWED_CORS_HEADERS, createCorsOriginHandler } from './utils/corsConfig';
 
-// Load environment variables
+// Load environment variables from server/.env regardless of cwd
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 dotenv.config();
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
@@ -242,10 +244,7 @@ app.get('/api/stations/:id/departures', (req: Request, res: Response) => {
   );
   const activeControllers = reportService.getActiveControllerReports(now.getTime());
   const controllerAlerts = activeControllers.filter(
-    rep =>
-      rep.stopId === station.id ||
-      rep.progression?.currentStopId === station.id ||
-      station.lines.includes(rep.lineId)
+    rep => (rep.progression?.currentStopId || rep.stopId) === station.id
   );
   const predictiveAlerts = buildStationPredictiveAlerts(
     station.id,

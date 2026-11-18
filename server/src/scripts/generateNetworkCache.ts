@@ -1,7 +1,15 @@
+import dotenv from 'dotenv';
+import path from 'path';
 import { networkGeometryService } from '../services/networkGeometryService';
 
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config();
+
 async function main() {
-  console.log('[generate:network] Extraction des vrais tracés OSM/OSRM pour le réseau Divia (Dijon)...');
+  const hasGoogleKey = Boolean(process.env.GOOGLE_MAPS_API_KEY?.trim());
+  console.log(
+    `[generate:network] Extraction des tracés Divia (Dijon) — Google Routes API : ${hasGoogleKey ? 'ACTIVE' : 'absente (fallback OSM/OSRM)'}...`
+  );
   const start = Date.now();
   const payload = await networkGeometryService.generateNetworkShapes();
   const elapsed = Date.now() - start;

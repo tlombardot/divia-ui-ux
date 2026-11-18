@@ -751,4 +751,58 @@ describe('GoogleTransitService — Polyline decoding, TransitDetails mapping & W
     expect(seg.intermediateStops?.map(s => s.name)).toEqual(['Grangier', 'Miroir']);
     expect(seg.intermediateStops?.map(s => s.estimatedTime)).toEqual(['17:04', '17:08']);
   });
+
+  it('does NOT flag hasControllerAlert on a T2 North Dijon route when the only T2 controller is South at Monge', () => {
+    const now = new Date();
+    const t2NorthEncoded = encodeGooglePolyline([
+      [47.3262, 5.0461],
+      [47.3382, 5.0485],
+      [47.3545, 5.0512],
+    ]);
+
+    const northT2Route: GoogleRoute = {
+      duration: '600s',
+      distanceMeters: 3500,
+      legs: [
+        {
+          duration: '600s',
+          distanceMeters: 3500,
+          steps: [
+            {
+              travelMode: 'TRANSIT',
+              staticDuration: '600s',
+              distanceMeters: 3500,
+              polyline: { encodedPolyline: t2NorthEncoded },
+              transitDetails: {
+                headsign: 'Dijon Valmy',
+                stopCount: 5,
+                stopDetails: {
+                  departureStop: {
+                    name: 'République',
+                    location: { latLng: { latitude: 47.3262, longitude: 5.0461 } },
+                  },
+                  arrivalStop: {
+                    name: "Toison d'Or",
+                    location: { latLng: { latitude: 47.3545, longitude: 5.0512 } },
+                  },
+                },
+                transitLine: {
+                  name: 'Tram T2',
+                  nameShort: 'T2',
+                  color: '#4B2982',
+                  vehicle: { type: 'TRAM' },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const option = mapGoogleRouteToRouteOption(northT2Route, 0, now);
+    expect(option).not.toBeNull();
+    expect(option?.hasControllerAlert).toBe(false);
+    expect(option?.alerts).toHaveLength(0);
+    expect(option?.predictiveAlerts).toHaveLength(0);
+  });
 });
