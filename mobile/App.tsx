@@ -88,6 +88,9 @@ export default function App() {
 
   const [availableRoutes, setAvailableRoutes] = useState<RouteOption[]>([]);
   const [selectedRoute, setSelectedRoute] = useState<RouteOption | null>(null);
+  const [expandedTimelineSegments, setExpandedTimelineSegments] = useState<
+    Record<number, boolean>
+  >({});
   const [isLoadingRoutes, setIsLoadingRoutes] = useState<boolean>(false);
 
   const [activeReportCard, setActiveReportCard] = useState<Report | null>(null);
@@ -98,6 +101,23 @@ export default function App() {
 
   const isNavigating = navState !== 'IDLE';
   const effectiveUserLocation = isNavigating ? currentLocation : location;
+
+  // Reset expanded timeline accordions whenever the selected route changes
+  useEffect(() => {
+    setExpandedTimelineSegments({});
+  }, [selectedRoute?.id]);
+
+  const expandedTransitSegmentIndices = useMemo(
+    () =>
+      Object.entries(expandedTimelineSegments)
+        .filter(([, expanded]) => expanded)
+        .map(([idx]) => Number(idx)),
+    [expandedTimelineSegments]
+  );
+
+  const handleToggleTimelineSegment = useCallback((idx: number) => {
+    setExpandedTimelineSegments(prev => ({ ...prev, [idx]: !prev[idx] }));
+  }, []);
 
   // Keep "Ma position" strictly anchored to the user's real GPS coordinates
   useEffect(() => {
@@ -397,6 +417,9 @@ export default function App() {
           visibleLineIds={visibleLineIds}
           favoriteStopIds={favoriteIds}
           activeRoute={isNavigating ? activeRoute : selectedRoute}
+          expandedTransitSegmentIndices={
+            isNavigating ? undefined : expandedTransitSegmentIndices
+          }
           selectedStopId={selectedStop?.id}
           showControllersOnly={showControllersOnly}
           isFollowingUser={isFollowingUser}
@@ -510,7 +533,10 @@ export default function App() {
                 route={selectedRoute}
                 originLabel={originPoint.label}
                 destinationLabel={destinationPoint?.label || destinationText || 'Destination'}
+                expandedSegments={expandedTimelineSegments}
+                onToggleSegmentAccordion={handleToggleTimelineSegment}
                 onBackToList={() => {
+                  setExpandedTimelineSegments({});
                   setUiMode('directions');
                   setSheetSnap('half');
                 }}

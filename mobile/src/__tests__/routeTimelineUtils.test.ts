@@ -1,0 +1,192 @@
+import { describe, expect, it } from 'vitest';
+import { Report, RouteOption, RouteSegment } from '../types';
+import {
+  getExpandedIntermediateMapStops,
+  getTransitIntermediateDisplayModel,
+  resolveSegmentIntermediateStops,
+} from '../utils/routeTimelineUtils';
+
+describe('RouteTimelineUtils — Real Intermediate Stops & Map Coherence', () => {
+  it('returns accordion model with real stop names, estimated times and controller badge', () => {
+    const segment: RouteSegment = {
+      type: 'TRANSIT',
+      instruction: 'Prendre le Tram T1',
+      durationMinutes: 12,
+      distanceMeters: 2200,
+      polyline: [],
+      lineId: 'T1',
+      stopsCount: 4,
+      intermediateStops: [
+        {
+          id: 't1-foch',
+          name: 'Foch Gare',
+          latitude: 47.3235,
+          longitude: 5.0298,
+          estimatedTime: '14:03',
+          hasControllerAlert: false,
+        },
+        {
+          id: 'hub-darcy',
+          name: 'Darcy',
+          latitude: 47.3235,
+          longitude: 5.0335,
+          estimatedTime: '14:06',
+          hasControllerAlert: true,
+        },
+        {
+          id: 'hub-godrans',
+          name: 'Godrans Les Halles',
+          latitude: 47.3232,
+          longitude: 5.0401,
+          estimatedTime: '14:09',
+          hasControllerAlert: false,
+        },
+      ],
+    };
+
+    const model = getTransitIntermediateDisplayModel(segment, []);
+    expect(model.mode).toBe('accordion');
+    expect(model.collapsedLabel).toBe('Voir les 3 arrêts ⌄');
+    expect(model.expandedLabel).toBe('Masquer les arrêts ⌃');
+    expect(model.intermediateStops).toHaveLength(3);
+    expect(model.intermediateStops.map(s => s.name)).toEqual([
+      'Foch Gare',
+      'Darcy',
+      'Godrans Les Halles',
+    ]);
+    expect(model.intermediateStops[1].estimatedTime).toBe('14:06');
+    expect(model.intermediateStops[1].hasControllerAlert).toBe(true);
+  });
+
+  it('extracts real intermediate stops from legacy passedStops + estimatedStopTimes and fuses live alerts', () => {
+    const legacySegment: RouteSegment = {
+      type: 'TRANSIT',
+      instruction: 'Prendre le Tram T1',
+      durationMinutes: 8,
+      distanceMeters: 1500,
+      polyline: [],
+      lineId: 'T1',
+      stopsCount: 2,
+      passedStops: [
+        { id: 'hub-darcy', name: 'Darcy', latitude: 47.3235, longitude: 5.0335, lines: ['T1'] },
+        { id: 'hub-godrans', name: 'Godrans Les Halles', latitude: 47.3232, longitude: 5.0401, lines: ['T1'] },
+        { id: 'hub-republique', name: 'République', latitude: 47.3262, longitude: 5.0461, lines: ['T1'] },
+      ],
+      estimatedStopTimes: ['14:10', '14:14', '14:18'],
+    };
+
+    const liveAlert: Report = {
+      id: 'ctrl-1',
+      type: 'CONTROLLER',
+      stopId: 'hub-godrans',
+      stopName: 'Godrans Les Halles',
+      lineId: 'T1',
+      lineName: 'Tramway T1',
+      latitude: 47.3232,
+      longitude: 5.0401,
+      direction: 'Dir. Quetigny Centre',
+      reportedAt: Date.now(),
+      expiresAt: Date.now() + 40 * 60 * 1000,
+      upvotes: 1,
+      downvotes: 0,
+      reliabilityScore: 80,
+      status: 'active',
+    };
+
+    const resolved = resolveSegmentIntermediateStops(legacySegment, [liveAlert]);
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]).toMatchObject({
+      id: 'hub-godrans',
+      name: 'Godrans Les Halles',
+      estimatedTime: '14:14',
+      hasControllerAlert: true,
+    });
+
+    const model = getTransitIntermediateDisplayModel(legacySegment, [liveAlert]);
+    expect(model.mode).toBe('accordion');
+    expect(model.collapsedLabel).toBe('Voir 1 arrêt ⌄');
+  });
+
+  it('never generates generic fallback labels when intermediateStops is empty', () => {
+    const emptySegment: RouteSegment = {
+      type: 'TRANSIT',
+      instruction: 'Prendre le Bus B12',
+      durationMinutes: 9,
+      distanceMeters: 2100,
+      polyline: [],
+      lineId: 'B12',
+      stopsCount: 5,
+      intermediateStops: [],
+    };
+
+    const model = getTransitIntermediateDisplayModel(emptySegment, []);
+    expect(model.mode).toBe('none');
+    expect(model.collapsedLabel).toBeNull();
+    expect(model.expandedLabel).toBeNull();
+    expect(model.intermediateStops).toEqual([]);
+  });
+
+  it('returns map polyline stop markers only for expanded timeline segments', () => {
+    const route: RouteOption = {
+      id: 'route-test',
+      title: 'Recommandé · T1',
+      departureTime: '14:00',
+      arrivalTime: '14:15',
+      totalDurationMinutes: 15,
+      walkingDurationMinutes: 3,
+      transitDurationMinutes: 12,
+      transfersCount: 0,
+      segments: [
+        {
+          type: 'WALK',
+          instruction: 'Marcher vers Dijon Gare',
+          durationMinutes: 3,
+          distanceMeters: 200,
+          polyline: [],
+        },
+        {
+          type: 'TRANSIT',
+          instruction: 'Prendre le Tram T1',
+          durationMinutes: 12,
+          distanceMeters: 2100,
+          polyline: [],
+          lineId: 'T1',
+          lineColor: '#E11535',
+          intermediateStops: [
+            {
+              id: 't1-foch',
+              name: 'Foch Gare',
+              latitude: 47.3235,
+              longitude: 5.0298,
+              estimatedTime: '14:06',
+              hasControllerAlert: false,
+            },
+            {
+              id: 'hub-darcy',
+              name: 'Darcy',
+              latitude: 47.3235,
+              longitude: 5.0335,
+              estimatedTime: '14:09',
+              hasControllerAlert: false,
+            },
+          ],
+        },
+      ],
+      steps: [],
+      summary: 'T1 (12 min)',
+      nextDepartureMinutes: 2,
+      hasControllerAlert: false,
+      alerts: [],
+      fullPolyline: [],
+    };
+
+    // Collapsed -> no intermediate markers
+    expect(getExpandedIntermediateMapStops(route, [], [])).toEqual([]);
+
+    // Expanded segment 1 -> both real stops returned with T1 color
+    const markers = getExpandedIntermediateMapStops(route, [1], []);
+    expect(markers).toHaveLength(2);
+    expect(markers.map(m => m.stop.name)).toEqual(['Foch Gare', 'Darcy']);
+    expect(markers[0].lineColor).toBe('#E11535');
+  });
+});

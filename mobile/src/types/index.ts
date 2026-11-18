@@ -47,6 +47,15 @@ export interface CrowdStatus {
 
 export type RouteSegmentType = 'WALK' | 'TRANSIT' | 'TRANSFER';
 
+export interface IntermediateStopInfo {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  estimatedTime: string;
+  hasControllerAlert: boolean;
+}
+
 export interface RouteSegment {
   type: RouteSegmentType;
   instruction: string;
@@ -62,6 +71,7 @@ export interface RouteSegment {
   toStop?: TransitStop;
   stopsCount?: number;
   passedStops?: TransitStop[];
+  intermediateStops?: IntermediateStopInfo[];
   estimatedStopTimes?: string[];
   instructions?: string[];
   turnInstructions?: string[];

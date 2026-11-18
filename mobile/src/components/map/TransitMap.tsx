@@ -10,6 +10,7 @@ import {
 } from '../../utils/controllerTrackingUtils';
 import { getCrowdBadgeTheme } from '../../utils/crowdUtils';
 import { computeCorridorOffsets } from '../../utils/polylineOffset';
+import { resolveSegmentIntermediateStops } from '../../utils/routeTimelineUtils';
 import { NavigationArrowMarker } from './NavigationArrowMarker';
 
 interface TransitMapProps {
@@ -19,6 +20,7 @@ interface TransitMapProps {
   visibleLineIds?: string[];
   favoriteStopIds?: string[];
   activeRoute?: RouteOption | null;
+  expandedTransitSegmentIndices?: number[];
   selectedStopId?: string | null;
   showControllersOnly?: boolean;
   isFollowingUser?: boolean;
@@ -74,6 +76,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
   visibleLineIds,
   favoriteStopIds = [],
   activeRoute,
+  expandedTransitSegmentIndices,
   selectedStopId,
   showControllersOnly = false,
   isFollowingUser = false,
@@ -297,8 +300,9 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                     </Marker>
                   )}
 
-                  {segment.passedStops &&
-                    segment.passedStops.slice(1, -1).map(interStop => (
+                  {(expandedTransitSegmentIndices === undefined ||
+                    expandedTransitSegmentIndices.includes(idx)) &&
+                    resolveSegmentIntermediateStops(segment, reports).map(interStop => (
                       <Marker
                         key={`inter-${idx}-${interStop.id}`}
                         coordinate={{
@@ -306,6 +310,11 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                           longitude: interStop.longitude,
                         }}
                         title={interStop.name}
+                        description={
+                          interStop.estimatedTime
+                            ? `Passage estimé : ${interStop.estimatedTime}`
+                            : undefined
+                        }
                         anchor={{ x: 0.5, y: 0.5 }}
                         tracksViewChanges={false}
                         zIndex={58}
@@ -313,7 +322,11 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                         <View
                           style={[
                             styles.routeIntermediateDot,
-                            { borderColor: segColor },
+                            {
+                              borderColor: interStop.hasControllerAlert
+                                ? COLORS.error
+                                : segColor,
+                            },
                           ]}
                         />
                       </Marker>

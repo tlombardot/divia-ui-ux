@@ -44,6 +44,7 @@ out/
 *.sqlite3
 data.json
 server/data/network-shapes-cache.json
+server/data/divia-catalog-cache.json
 
 # Logs & Debug
 npm-debug.log*
