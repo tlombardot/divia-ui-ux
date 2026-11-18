@@ -6,25 +6,40 @@ Plateforme communautaire et temps réel dédiée aux usagers du réseau de trans
 
 ---
 
-## Démarrage rapide — Mode École (Wi-Fi isolé / Tunnel HTTPS)
+## Démarrage rapide — Wi-Fi Direct (Mode LAN pur, sans tunnel et sans compte Expo)
 
-Sur un réseau Wi-Fi d'école ou d'entreprise où l'isolation client empêche le téléphone de joindre directement l'IP locale du PC, lancez l'ensemble de la stack en **une seule commande** :
+Lorsque le PC Linux et les téléphones sont connectés au **même réseau Wi-Fi**, lancez toute la stack en **une seule commande** :
+
+```bash
+./scripts/start-wifi.sh
+```
+
+Ce script automatisé :
+1. Détecte la vraie adresse IPv4 Wi-Fi du PC Linux (`ip -4 route get 1.1.1.1`, en ignorant Docker `172.17.*` et `127.0.0.1`).
+2. Vérifie le pare-feu Linux (`ufw`) et affiche la commande exacte si les ports `8081` ou `3000` sont bloqués (`sudo ufw allow 8081/tcp && sudo ufw allow 3000/tcp`).
+3. Exécute `npx expo logout` silencieusement pour que le QR code soit scannable par **n'importe quel téléphone** sans compte Expo.
+4. Démarre le backend `/server` sur `0.0.0.0:3000`, vérifie `http://<WIFI_IP>:3000/health` (`200 OK`), puis lance `REACT_NATIVE_PACKAGER_HOSTNAME=<WIFI_IP> npx expo start --lan --clear`.
+5. L'application mobile résout automatiquement `http://<WIFI_IP>:3000` depuis Expo Go tant que `EXPO_PUBLIC_API_URL=` reste vide dans `mobile/.env` et affiche `[Network] Backend cible : http://<WIFI_IP>:3000`.
+
+> Pour vérifier la chaîne Wi-Fi + pare-feu + backend sans démarrer Expo : `./scripts/start-wifi.sh --check-only`.
+
+---
+
+## Mode École — Wi-Fi isolé (Tunnel HTTPS)
+
+Sur un réseau Wi-Fi isolé où les clients ne peuvent pas communiquer entre eux en LAN :
 
 ```bash
 ./scripts/start-school.sh
 ```
 
-Ce script automatisé :
-1. Démarre le backend `/server` sur `0.0.0.0:3000` et attend que `http://127.0.0.1:3000/health` réponde `200 OK`.
-2. Ouvre un tunnel HTTPS gratuit sans compte : tente d'abord `localhost.run` (SSH), puis bascule automatiquement en moins de 8s sur `cloudflared` ou `localtunnel` (port HTTPS `443`) si le Wi-Fi de l'école bloque le port SSH `22`.
-3. Capture automatiquement l'URL générée, vérifie bout-en-bout `/health -> 200 OK`, et met à jour `EXPO_PUBLIC_API_URL` dans `mobile/.env`.
-4. Lance `npx expo start --tunnel --clear` dans `/mobile` et arrête proprement tous les processus (arbre complet) sur `Ctrl+C`.
+Ce script démarre le backend sur `0.0.0.0:3000`, ouvre un tunnel HTTPS gratuit (`localhost.run` avec fallback automatique `cloudflared` / `localtunnel` sur le port `443` si le port SSH `22` est bloqué), injecte `EXPO_PUBLIC_API_URL` dans `mobile/.env` et lance `npx expo start --tunnel --clear`.
 
-> Astuce : pour forcer directement un fournisseur précis (sans attendre le timeout SSH), utilisez `TUNNEL_PROVIDER=localtunnel ./scripts/start-school.sh` (valeurs : `auto`, `localhost.run`, `cloudflared`, `localtunnel`). Pour tester la chaîne backend + tunnel sans lancer Expo : `./scripts/start-school.sh --check-only`.
+> Astuce : `TUNNEL_PROVIDER=localtunnel ./scripts/start-school.sh` pour passer directement sur le port `443`.
 
 ---
 
-## Développement local (réseau domestique)
+## Développement manuel
 
 ### 1. Backend (`/server`)
 ```bash
@@ -39,7 +54,7 @@ npm run dev
 cd mobile
 cp .env.example .env
 npm install
-npx expo start
+npx expo start --lan
 ```
 
 ---
