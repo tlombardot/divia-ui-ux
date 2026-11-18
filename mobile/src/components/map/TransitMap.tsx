@@ -10,6 +10,8 @@ import {
 } from '../../utils/controllerTrackingUtils';
 import { getCrowdBadgeTheme } from '../../utils/crowdUtils';
 import { computeCorridorOffsets } from '../../utils/polylineOffset';
+import { resolveSegmentIntermediateStops } from '../../utils/routeTimelineUtils';
+import { NavigationArrowMarker } from './NavigationArrowMarker';
 
 interface TransitMapProps {
   userLocation: UserLocation;
@@ -18,9 +20,11 @@ interface TransitMapProps {
   visibleLineIds?: string[];
   favoriteStopIds?: string[];
   activeRoute?: RouteOption | null;
+  expandedTransitSegmentIndices?: number[];
   selectedStopId?: string | null;
   showControllersOnly?: boolean;
   isFollowingUser?: boolean;
+  isNavigating?: boolean;
   floatingBottomOffset?: number;
   hideFloatingButtons?: boolean;
   onSelectReport: (report: Report) => void;
@@ -72,9 +76,11 @@ export const TransitMap: React.FC<TransitMapProps> = ({
   visibleLineIds,
   favoriteStopIds = [],
   activeRoute,
+  expandedTransitSegmentIndices,
   selectedStopId,
   showControllersOnly = false,
   isFollowingUser = false,
+  isNavigating = false,
   floatingBottomOffset = 180,
   hideFloatingButtons = false,
   onSelectReport,
@@ -183,7 +189,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
           latitudeDelta: 0.036,
           longitudeDelta: 0.036,
         }}
-        showsUserLocation={!userLocation.isDemoMode}
+        showsUserLocation={false}
         showsMyLocationButton={false}
         showsCompass={false}
         showsTraffic={false}
@@ -294,8 +300,9 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                     </Marker>
                   )}
 
-                  {segment.passedStops &&
-                    segment.passedStops.slice(1, -1).map(interStop => (
+                  {(expandedTransitSegmentIndices === undefined ||
+                    expandedTransitSegmentIndices.includes(idx)) &&
+                    resolveSegmentIntermediateStops(segment, reports).map(interStop => (
                       <Marker
                         key={`inter-${idx}-${interStop.id}`}
                         coordinate={{
@@ -303,6 +310,11 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                           longitude: interStop.longitude,
                         }}
                         title={interStop.name}
+                        description={
+                          interStop.estimatedTime
+                            ? `Passage estimé : ${interStop.estimatedTime}`
+                            : undefined
+                        }
                         anchor={{ x: 0.5, y: 0.5 }}
                         tracksViewChanges={false}
                         zIndex={58}
@@ -310,7 +322,11 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                         <View
                           style={[
                             styles.routeIntermediateDot,
-                            { borderColor: segColor },
+                            {
+                              borderColor: interStop.hasControllerAlert
+                                ? COLORS.error
+                                : segColor,
+                            },
                           ]}
                         />
                       </Marker>
@@ -359,22 +375,23 @@ export const TransitMap: React.FC<TransitMapProps> = ({
           </>
         )}
 
-        {/* User Position Marker (in Demo Mode or active simulation) */}
-        {userLocation.isDemoMode && (
-          <Marker
-            coordinate={{
-              latitude: userLocation.latitude,
-              longitude: userLocation.longitude,
-            }}
-            title="Votre position"
-            anchor={{ x: 0.5, y: 0.5 }}
-            zIndex={72}
-          >
-            <View style={styles.userMarkerOuter}>
-              <View style={styles.userMarkerInner} />
-            </View>
-          </Marker>
-        )}
+        {/* User Position Marker (Google Maps Navigation Arrow) */}
+        <Marker
+          coordinate={{
+            latitude: userLocation.latitude,
+            longitude: userLocation.longitude,
+          }}
+          title="Votre position"
+          anchor={{ x: 0.5, y: 0.5 }}
+          flat={true}
+          tracksViewChanges={true}
+          zIndex={80}
+        >
+          <NavigationArrowMarker
+            heading={userLocation.heading}
+            isNavigating={isNavigating}
+          />
+        </Marker>
 
         {/* All Clickable Divia Stations (Tram, Liane, Bus) + Favorites (★) + Crowd Badges */}
         {!showControllersOnly &&

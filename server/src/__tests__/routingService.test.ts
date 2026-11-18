@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   calculateDistanceMeters,
+  DIJON_LINES,
   findNearestStop,
   HUB_DARCY,
   HUB_GARE,
@@ -8,6 +9,7 @@ import {
   HUB_REPUBLIQUE,
   HUB_UNIVERSITE,
 } from '../data/dijonNetwork';
+import { networkGeometryService } from '../services/networkGeometryService';
 import { getPedestrianRoute } from '../services/pedestrianService';
 import {
   calculateRoutes,
@@ -17,6 +19,13 @@ import {
 import { projectPointOntoPolyline } from '../utils/geometryTopology';
 
 describe('routingService — Door-to-Door & Anti-Detour Dijkstra', () => {
+  beforeEach(() => {
+    vi.spyOn(networkGeometryService, 'getCachedLinesSync').mockReturnValue(DIJON_LINES);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
   it('calculates direct distance accurately with Haversine formula', () => {
     // Darcy (47.3235, 5.0335) to Gare (47.3236, 5.0278) is ~430m
     const distance = calculateDistanceMeters(47.3235, 5.0335, 47.3236, 5.0278);

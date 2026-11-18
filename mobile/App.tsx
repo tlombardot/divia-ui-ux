@@ -29,6 +29,7 @@ import { useReports } from './src/hooks/useReports';
 import { apiService } from './src/services/apiService';
 import { COLORS } from './src/theme/colors';
 import { GeocodedAddress, Report, RouteOption, TransitLine, TransitStop } from './src/types';
+import { animateCameraToUser } from './src/utils/mapCameraUtils';
 
 type UiScreenMode = 'explore' | 'station' | 'directions' | 'timeline';
 
@@ -86,6 +87,9 @@ export default function App() {
 
   const [availableRoutes, setAvailableRoutes] = useState<RouteOption[]>([]);
   const [selectedRoute, setSelectedRoute] = useState<RouteOption | null>(null);
+  const [expandedTimelineSegments, setExpandedTimelineSegments] = useState<
+    Record<number, boolean>
+  >({});
   const [isLoadingRoutes, setIsLoadingRoutes] = useState<boolean>(false);
 
   const [activeReportCard, setActiveReportCard] = useState<Report | null>(null);
@@ -96,6 +100,23 @@ export default function App() {
 
   const isNavigating = navState !== 'IDLE';
   const effectiveUserLocation = isNavigating ? currentLocation : location;
+
+  // Reset expanded timeline accordions whenever the selected route changes
+  useEffect(() => {
+    setExpandedTimelineSegments({});
+  }, [selectedRoute?.id]);
+
+  const expandedTransitSegmentIndices = useMemo(
+    () =>
+      Object.entries(expandedTimelineSegments)
+        .filter(([, expanded]) => expanded)
+        .map(([idx]) => Number(idx)),
+    [expandedTimelineSegments]
+  );
+
+  const handleToggleTimelineSegment = useCallback((idx: number) => {
+    setExpandedTimelineSegments(prev => ({ ...prev, [idx]: !prev[idx] }));
+  }, []);
 
   // Keep "Ma position" strictly anchored to the user's real GPS coordinates
   useEffect(() => {
@@ -281,19 +302,57 @@ export default function App() {
     if (!selectedRoute) return;
     startNavigation(selectedRoute);
     setIsFollowingUser(true);
-  }, [selectedRoute, startNavigation]);
+    animateCameraToUser(mapRef, {
+      latitude: effectiveUserLocation.latitude,
+      longitude: effectiveUserLocation.longitude,
+      heading: effectiveUserLocation.heading,
+      duration: 800,
+      isNavigating: true,
+    });
+  }, [
+    selectedRoute,
+    startNavigation,
+    effectiveUserLocation.latitude,
+    effectiveUserLocation.longitude,
+    effectiveUserLocation.heading,
+  ]);
+
+  // Suivi continu de la position de l'utilisateur style Google Maps pendant la navigation
+  useEffect(() => {
+    if (!isNavigating || !isFollowingUser || !mapRef.current) return;
+    animateCameraToUser(mapRef, {
+      latitude: effectiveUserLocation.latitude,
+      longitude: effectiveUserLocation.longitude,
+      heading: effectiveUserLocation.heading,
+      duration: isSimulating ? 180 : 350,
+      isNavigating: true,
+    });
+  }, [
+    isNavigating,
+    isFollowingUser,
+    isSimulating,
+    effectiveUserLocation.latitude,
+    effectiveUserLocation.longitude,
+    effectiveUserLocation.heading,
+  ]);
 
   const handleRecenter = useCallback(() => {
     if (mapRef.current) {
-      mapRef.current.animateToRegion({
+      animateCameraToUser(mapRef, {
         latitude: effectiveUserLocation.latitude,
         longitude: effectiveUserLocation.longitude,
-        latitudeDelta: 0.014,
-        longitudeDelta: 0.014,
+        heading: effectiveUserLocation.heading,
+        duration: 500,
+        isNavigating,
       });
       setIsFollowingUser(true);
     }
-  }, [effectiveUserLocation.latitude, effectiveUserLocation.longitude]);
+  }, [
+    effectiveUserLocation.latitude,
+    effectiveUserLocation.longitude,
+    effectiveUserLocation.heading,
+    isNavigating,
+  ]);
 
   // "Centrer sur la ligne" from LineFilterSheet
   const handleFocusLine = useCallback(
@@ -373,9 +432,13 @@ export default function App() {
           visibleLineIds={visibleLineIds}
           favoriteStopIds={favoriteIds}
           activeRoute={isNavigating ? activeRoute : selectedRoute}
+          expandedTransitSegmentIndices={
+            isNavigating ? undefined : expandedTransitSegmentIndices
+          }
           selectedStopId={selectedStop?.id}
           showControllersOnly={false}
           isFollowingUser={isFollowingUser}
+          isNavigating={isNavigating}
           floatingBottomOffset={floatingBottomOffset}
           hideFloatingButtons={!isNavigating && sheetSnap === 'full'}
           onSelectReport={report => setActiveReportCard(report)}
@@ -482,7 +545,10 @@ export default function App() {
                 route={selectedRoute}
                 originLabel={originPoint.label}
                 destinationLabel={destinationPoint?.label || destinationText || 'Destination'}
+                expandedSegments={expandedTimelineSegments}
+                onToggleSegmentAccordion={handleToggleTimelineSegment}
                 onBackToList={() => {
+                  setExpandedTimelineSegments({});
                   setUiMode('directions');
                   setSheetSnap('half');
                 }}
@@ -510,6 +576,13 @@ export default function App() {
               stopNavigation();
               setUiMode('explore');
               setSheetSnap('peek');
+              setIsFollowingUser(true);
+              animateCameraToUser(mapRef, {
+                latitude: effectiveUserLocation.latitude,
+                longitude: effectiveUserLocation.longitude,
+                duration: 600,
+                isNavigating: false,
+              });
             }}
           />
         )}
