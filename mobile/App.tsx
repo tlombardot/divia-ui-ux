@@ -7,7 +7,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { LineFilterSheet } from './src/components/map/LineFilterSheet';
 import { TransitMap } from './src/components/map/TransitMap';
 import { ActiveTripBottomSheet } from './src/components/navigation/ActiveTripBottomSheet';
-import { ReportBottomSheet } from './src/components/reports/ReportBottomSheet';
+import { QuickControllerModal } from './src/components/reports/QuickControllerModal';
 import { ReportCard } from './src/components/reports/ReportCard';
 import { DirectionsHeader } from './src/components/search/DirectionsHeader';
 import { FloatingSearchHeader } from './src/components/search/FloatingSearchHeader';
@@ -518,8 +518,8 @@ export default function App() {
           />
         )}
 
-        {/* Redesigned Divia Waze & Crowd Reporting Bottom Sheet */}
-        <ReportBottomSheet
+        {/* 1-Tap Quick Controller Modal (Nearest Stop by Geolocation) */}
+        <QuickControllerModal
           visible={isReportModalVisible}
           userLocation={effectiveUserLocation}
           initialStop={reportTargetStop}
