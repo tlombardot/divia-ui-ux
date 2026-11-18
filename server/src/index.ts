@@ -32,15 +32,21 @@ import {
   stationsQuerySchema,
   voteReportSchema,
 } from './types';
+import { ALLOWED_CORS_HEADERS, createCorsOriginHandler } from './utils/corsConfig';
 
 // Load environment variables
 dotenv.config();
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
-const CORS_ORIGIN = process.env.CORS_ORIGIN || process.env.CLIENT_ORIGIN || '*';
+const HOST = process.env.HOST || '0.0.0.0';
+const CORS_ORIGIN = process.env.CORS_ORIGIN || process.env.CLIENT_ORIGIN || '';
 
 export const app = express();
 export const server = http.createServer(app);
+
+// Enable reverse-proxy support (localhost.run, localtunnel, ngrok, Render, Railway)
+// Must be configured before express-rate-limit so X-Forwarded-For is trusted cleanly.
+app.set('trust proxy', 1);
 
 // -----------------------------------------------------------------------------
 // Security Middleware (OWASP Top 10)
@@ -53,17 +59,17 @@ app.use(
   })
 );
 
-// 2. CORS configuration
-const allowedOrigins =
-  CORS_ORIGIN === '*'
-    ? '*'
-    : CORS_ORIGIN.split(',').map(origin => origin.trim());
+// 2. CORS configuration (strict in production, tunnel/mobile-friendly in dev)
+const corsOriginHandler = createCorsOriginHandler({
+  corsOrigin: CORS_ORIGIN,
+  nodeEnv: process.env.NODE_ENV,
+});
 
 app.use(
   cors({
-    origin: allowedOrigins,
-    methods: ['GET', 'POST'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    origin: corsOriginHandler,
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ALLOWED_CORS_HEADERS,
   })
 );
 
@@ -404,8 +410,9 @@ app.post('/api/reports/vote', (req: Request, res: Response) => {
 
 export const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: corsOriginHandler,
     methods: ['GET', 'POST'],
+    allowedHeaders: ALLOWED_CORS_HEADERS,
   },
   pingTimeout: 20000,
   pingInterval: 25000,
@@ -497,17 +504,17 @@ reportService.onReportExpired((expiredReport) => {
 });
 
 // Start background worker for TTL & terminus expiry cleanup + 20s Socket.io live controller progression sync
-reportService.startCleanupWorker(20000);
-
 if (process.env.NODE_ENV !== 'test') {
+  reportService.startCleanupWorker(20000);
+
   setInterval(() => {
     const activeReports = reportService.getActiveReports();
     io.emit('reports:sync', activeReports);
   }, 20000);
 
   networkGeometryService.warmupCache();
-  server.listen(PORT, () => {
-    console.log(`[DiviAkhaaa Server] listening on port ${PORT}`);
-    console.log(`[DiviAkhaaa Server] Health check available at http://localhost:${PORT}/health`);
+  server.listen(PORT, HOST, () => {
+    console.log(`[DiviAkhaaa Server] listening on http://${HOST}:${PORT}`);
+    console.log(`[DiviAkhaaa Server] Health check available at http://127.0.0.1:${PORT}/health`);
   });
 }
