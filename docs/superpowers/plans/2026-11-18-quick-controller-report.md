@@ -43,27 +43,27 @@
   - `resolveDefaultLineId(stop: TransitStop): string`
   - `buildQuickControllerPayload(stop: TransitStop, lineId: string, description?: string): CreateReportPayload`
 
-- [ ] **Step 1: Write failing unit tests for quick reporting utilities**
+- [x] **Step 1: Write failing unit tests for quick reporting utilities**
   Create `mobile/src/__tests__/quickReportUtils.test.ts` testing:
   - `getNearestStops` correctly ranks stops by Haversine distance and formats distance ("25 m", "1.2 km").
   - `resolveDefaultLineId` prioritizes Tram lines (T1/T2) or first available line, or 'ALL'.
   - `buildQuickControllerPayload` structures the payload with 40-minute TTL expectations, stop coordinates, and direction labels.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
   Run: `cd mobile && npx vitest run src/__tests__/quickReportUtils.test.ts`
   Expected: FAIL with missing module `quickReportUtils`.
 
-- [ ] **Step 3: Implement `quickReportUtils.ts`**
+- [x] **Step 3: Implement `quickReportUtils.ts`**
   Implement pure functions in `mobile/src/utils/quickReportUtils.ts` using existing `calculateDistanceMeters` and `ALL_DIJON_STOPS`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
   Run: `cd mobile && npx vitest run src/__tests__/quickReportUtils.test.ts`
   Expected: PASS
 
-- [ ] **Step 5: Verify typecheck & lint**
+- [x] **Step 5: Verify typecheck & lint**
   Run: `cd mobile && npm run typecheck && npm run lint`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
   Run: `git add mobile/src/utils/quickReportUtils.ts mobile/src/__tests__/quickReportUtils.test.ts`
   `git commit -m "feat(mobile): add quick report calculation and formatting utilities"`
 
@@ -94,18 +94,18 @@
     }
     ```
 
-- [ ] **Step 1: Write failing tests for QuickControllerModal**
+- [x] **Step 1: Write failing tests for QuickControllerModal**
   Create `mobile/src/__tests__/quickControllerModal.test.ts` testing:
   - Modal displays nearest stop name and distance based on `userLocation`.
   - Calling submit emits the controller report payload for the active stop.
   - Selecting an alternative stop from nearby suggestions switches the target stop.
   - Double submit is prevented while confirmation or submit is pending.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
   Run: `cd mobile && npx vitest run src/__tests__/quickControllerModal.test.ts`
   Expected: FAIL (component not found).
 
-- [ ] **Step 3: Implement `QuickControllerModal.tsx`**
+- [x] **Step 3: Implement `QuickControllerModal.tsx`**
   Build clean, centered / compact dialog:
   - Header with title: "🚨 Signaler des contrôleurs" and close button.
   - Prominent stop banner: "📍 Arrêt détecté : **[Stop Name]** (à [Distance])".
@@ -114,14 +114,14 @@
   - Prominent 1-Tap CTA button: "🚨 Confirmer le signalement (40 min)".
   - Confirmation state with green checkmark and auto-dismiss after 1s.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
   Run: `cd mobile && npx vitest run src/__tests__/quickControllerModal.test.ts`
   Expected: PASS
 
-- [ ] **Step 5: Verify typecheck & lint**
+- [x] **Step 5: Verify typecheck & lint**
   Run: `cd mobile && npm run typecheck && npm run lint`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
   Run: `git add mobile/src/components/reports/QuickControllerModal.tsx mobile/src/__tests__/quickControllerModal.test.ts`
   `git commit -m "feat(mobile): create intuitive 1-tap QuickControllerModal component"`
 
@@ -139,21 +139,21 @@
 - Wires the floating action button 🚨 in `TransitMap.tsx` directly to the new `QuickControllerModal`.
 - Keeps `ReportBottomSheet` available for crowd affluence or transitions smoothly.
 
-- [ ] **Step 1: Update App.tsx to wire QuickControllerModal**
+- [x] **Step 1: Update App.tsx to wire QuickControllerModal**
   - Import `QuickControllerModal`.
   - Connect `isReportModalVisible`, `reportTargetStop`, and `createReport`.
   - Ensure pressing the map FAB 🚨 opens `QuickControllerModal` with the user's real GPS position.
 
-- [ ] **Step 2: Verify existing mobile test suites**
+- [x] **Step 2: Verify existing mobile test suites**
   Run: `cd mobile && npm test`
   Expected: All test suites PASS (including `mobileLogic`, `favoritesAndCrowd`, `controllerTracking`, etc.).
 
-- [ ] **Step 3: Verify end-to-end lint, typecheck, and server tests**
+- [x] **Step 3: Verify end-to-end lint, typecheck, and server tests**
   Run: `cd mobile && npm run typecheck && npm run lint`
   Run: `cd server && npm test && npx tsc --noEmit && npm run lint`
   Expected: Zero errors.
 
-- [ ] **Step 4: Commit integration changes**
+- [x] **Step 4: Commit integration changes**
   Run: `git add mobile/App.tsx mobile/src/components/map/TransitMap.tsx`
   `git commit -m "feat(mobile): wire QuickControllerModal to map FAB and station detail"`
 
@@ -164,14 +164,14 @@
 **Files:**
 - Entire repository verification (`server` and `mobile`).
 
-- [ ] **Step 1: Run complete mobile verification suite**
+- [x] **Step 1: Run complete mobile verification suite**
   Run: `cd mobile && npm test && npm run typecheck && npm run lint`
   Expected: 100% pass.
 
-- [ ] **Step 2: Run complete server verification suite**
+- [x] **Step 2: Run complete server verification suite**
   Run: `cd server && npm test && npx tsc --noEmit && npm run lint`
   Expected: 100% pass.
 
-- [ ] **Step 3: Final git status and log check**
+- [x] **Step 3: Final git status and log check**
   Run: `git status && git log -n 5 --oneline`
   Ensure clean branch `feat/quick-controller-report` ready for PR.
