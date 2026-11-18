@@ -371,6 +371,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
           title="Votre position"
           anchor={{ x: 0.5, y: 0.5 }}
           flat={true}
+          tracksViewChanges={true}
           zIndex={80}
         >
           <NavigationArrowMarker

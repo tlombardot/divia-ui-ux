@@ -44,6 +44,7 @@ export function useLiveNavigation() {
   lastLocationRef.current = currentLocation;
 
   const locationSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
+  const headingSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
   const simulationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ---------------------------------------------------------------------------
@@ -352,6 +353,53 @@ export function useLiveNavigation() {
       }
     };
   }, [processLocationUpdate, isSimulating]);
+
+  // ---------------------------------------------------------------------------
+  // Suivi en temps réel de la boussole physique du smartphone (orientation de la flèche)
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    let isMounted = true;
+
+    async function startCompassTracking() {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+
+        const sub = await Location.watchHeadingAsync(headingObj => {
+          if (!isMounted || isSimulating) return;
+          const h =
+            headingObj.trueHeading >= 0
+              ? headingObj.trueHeading
+              : headingObj.magHeading;
+
+          if (h >= 0) {
+            const rounded = Math.round(h);
+            setCurrentLocation(prev => {
+              if (prev.heading === rounded) return prev;
+              return {
+                ...prev,
+                heading: rounded,
+              };
+            });
+          }
+        });
+
+        headingSubscriptionRef.current = sub;
+      } catch (e) {
+        console.warn('[useLiveNavigation] Erreur subscription boussole:', e);
+      }
+    }
+
+    startCompassTracking();
+
+    return () => {
+      isMounted = false;
+      if (headingSubscriptionRef.current) {
+        headingSubscriptionRef.current.remove();
+        headingSubscriptionRef.current = null;
+      }
+    };
+  }, [isSimulating]);
 
   // ---------------------------------------------------------------------------
   // Restauration de session depuis AsyncStorage

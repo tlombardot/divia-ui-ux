@@ -1,6 +1,6 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
-import Svg, { G, Path } from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
 
 interface NavigationArrowMarkerProps {
   heading?: number | null;
@@ -24,8 +24,8 @@ export const NavigationArrowMarker: React.FC<NavigationArrowMarkerProps> = ({
       {/* Halo d'aura radar translucide au sol */}
       <View style={[styles.pulseRing, isNavigating && styles.pulseRingNav]} />
 
-      <Svg width={42} height={42} viewBox="0 0 42 42">
-        <G transform={`rotate(${rotation}, 21, 21)`}>
+      <View style={[styles.arrowWrapper, { transform: [{ rotate: `${rotation}deg` }] }]}>
+        <Svg width={42} height={42} viewBox="0 0 42 42">
           {/* Ombre portée douce */}
           <Path
             d="M21 4 L36 36 L21 28 L6 36 Z"
@@ -61,8 +61,8 @@ export const NavigationArrowMarker: React.FC<NavigationArrowMarkerProps> = ({
             strokeWidth={1}
             strokeLinecap="round"
           />
-        </G>
-      </Svg>
+        </Svg>
+      </View>
     </View>
   );
 };
@@ -71,6 +71,12 @@ const styles = StyleSheet.create({
   container: {
     width: 48,
     height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  arrowWrapper: {
+    width: 42,
+    height: 42,
     alignItems: 'center',
     justifyContent: 'center',
   },
