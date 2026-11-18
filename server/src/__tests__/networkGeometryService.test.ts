@@ -270,4 +270,50 @@ describe('NetworkGeometryService — Official Palette, Continuity & Disk Cache',
     expect(regenerated.fromCache).toBe(false);
     expect(regenerated.cacheVersion).toBe(2);
   });
+
+  it('invalidates a non-Google disk cache when GOOGLE_MAPS_API_KEY becomes configured', async () => {
+    const prevKey = process.env.GOOGLE_MAPS_API_KEY;
+    try {
+      // 1. Generate a fallback/non-Google cache while offline
+      delete process.env.GOOGLE_MAPS_API_KEY;
+      const offlineSvc = new NetworkGeometryService({
+        cacheFilePath: tempCachePath,
+        allowExternalFetch: false,
+      });
+      const fallbackData = await offlineSvc.getNetworkShapes();
+      expect(fallbackData.lines.every(l => l.shapeSource !== 'google_routes')).toBe(true);
+
+      // 2. Now enable GOOGLE_MAPS_API_KEY + external fetch -> stale fallback cache must be invalidated
+      process.env.GOOGLE_MAPS_API_KEY = 'AIzaTestFakeKeyForCacheInvalidation';
+      const onlineSvc = new NetworkGeometryService({
+        cacheFilePath: tempCachePath,
+        allowExternalFetch: true,
+      });
+      expect(onlineSvc.loadFromDiskCache()).toBeNull();
+
+      // 3. If disk cache contains google_routes shapes, loadFromDiskCache accepts it
+      const upgradedLines = fallbackData.lines.map(l => ({
+        ...l,
+        shapeSource: 'google_routes' as const,
+      }));
+      fs.writeFileSync(
+        tempCachePath,
+        JSON.stringify({
+          version: NETWORK_CACHE_VERSION,
+          cacheVersion: SHAPES_CACHE_VERSION,
+          generatedAt: Date.now(),
+          lines: upgradedLines,
+          stops: fallbackData.stops,
+        }),
+        'utf-8'
+      );
+      expect(onlineSvc.loadFromDiskCache()).not.toBeNull();
+    } finally {
+      if (prevKey === undefined) {
+        delete process.env.GOOGLE_MAPS_API_KEY;
+      } else {
+        process.env.GOOGLE_MAPS_API_KEY = prevKey;
+      }
+    }
+  });
 });
