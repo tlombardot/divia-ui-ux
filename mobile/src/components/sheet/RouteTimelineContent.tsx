@@ -3,6 +3,7 @@ import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-nati
 import { getLineColor } from '../../data/dijonNetwork';
 import { RouteOption } from '../../types';
 import { getCrowdBadgeTheme } from '../../utils/crowdUtils';
+import { getTransitIntermediateDisplayModel } from '../../utils/routeTimelineUtils';
 
 interface RouteTimelineContentProps {
   route: RouteOption;
@@ -184,10 +185,8 @@ export const RouteTimelineContent: React.FC<RouteTimelineContentProps> = ({
           // TRANSIT Segment (5px Colored Bar + Filled/Ringed Stops + Accordion)
           // ===================================================================
           const lineColor = seg.lineColor || getLineColor(seg.lineId || 'T1');
-          const passedStops = seg.passedStops || [];
-          const intermediateStops =
-            passedStops.length > 2 ? passedStops.slice(1, -1) : [];
           const stopTimes = seg.estimatedStopTimes || [];
+          const intermediateDisplay = getTransitIntermediateDisplayModel(seg, route.alerts);
 
           return (
             <View key={`seg-transit-${idx}`} style={styles.segmentBlock}>
@@ -246,43 +245,80 @@ export const RouteTimelineContent: React.FC<RouteTimelineContentProps> = ({
                     </View>
                   )}
 
-                  {/* Clickable Accordion for Intermediate Stops */}
-                  <TouchableOpacity
-                    style={styles.accordionBtn}
-                    onPress={() => toggleSegmentAccordion(idx)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[styles.accordionText, { color: lineColor }]}>
-                      {isExpanded
-                        ? `Masquer les arrêts ⌃`
-                        : `Voir les ${seg.stopsCount || passedStops.length - 1} arrêts (${seg.durationMinutes} min) ⌄`}
-                    </Text>
-                  </TouchableOpacity>
+                  {/* Systematic Accordion when intermediate stops are resolved */}
+                  {intermediateDisplay.mode === 'accordion' && (
+                    <TouchableOpacity
+                      style={styles.accordionBtn}
+                      onPress={() => toggleSegmentAccordion(idx)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.accordionText, { color: lineColor }]}>
+                        {isExpanded
+                          ? intermediateDisplay.expandedLabel
+                          : intermediateDisplay.collapsedLabel}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
 
-                  {/* Expanded Intermediate Stations List with Estimated Passing Times */}
-                  {isExpanded && intermediateStops.length > 0 && (
-                    <View style={styles.intermediateList}>
-                      {intermediateStops.map((st, stIdx) => {
-                        const estTime = stopTimes[stIdx + 1] || '';
-                        return (
-                          <View key={st.id} style={styles.intermediateRow}>
-                            <View
-                              style={[
-                                styles.intermediateDot,
-                                { borderColor: lineColor },
-                              ]}
-                            />
-                            <Text style={styles.intermediateName}>{st.name}</Text>
-                            {estTime ? (
-                              <Text style={styles.intermediateTime}>{estTime}</Text>
-                            ) : null}
-                          </View>
-                        );
-                      })}
-                    </View>
+                  {/* UI Safety Net: uncatalogued secondary line with stopCount > 1 */}
+                  {intermediateDisplay.mode === 'fallback_info' &&
+                    intermediateDisplay.fallbackLabel && (
+                      <Text style={styles.fallbackStopsInfo}>
+                        {intermediateDisplay.fallbackLabel} · {seg.durationMinutes} min
+                      </Text>
+                    )}
+
+                  {/* Adjacent direct hop (no intermediate stops) */}
+                  {intermediateDisplay.mode === 'direct' && (
+                    <Text style={styles.fallbackStopsInfo}>
+                      Trajet direct ({seg.durationMinutes} min)
+                    </Text>
                   )}
                 </View>
               </View>
+
+              {/* Expanded Intermediate Stations aligned directly on the colored vertical line */}
+              {isExpanded &&
+                intermediateDisplay.mode === 'accordion' &&
+                intermediateDisplay.intermediateStops.map(st => (
+                  <View key={`inter-${idx}-${st.id}`} style={styles.intermediateNodeRow}>
+                    <View style={styles.timeCol}>
+                      <Text style={styles.intermediateTimeCol}>
+                        {st.estimatedTime || ''}
+                      </Text>
+                    </View>
+                    <View style={styles.railCol}>
+                      <View
+                        style={[
+                          styles.intermediateBarSegment,
+                          { backgroundColor: lineColor },
+                        ]}
+                      />
+                      <View
+                        style={[
+                          styles.intermediateDotOnRail,
+                          { borderColor: lineColor },
+                        ]}
+                      />
+                      <View
+                        style={[
+                          styles.intermediateBarSegment,
+                          { backgroundColor: lineColor },
+                        ]}
+                      />
+                    </View>
+                    <View style={styles.intermediateInfoCol}>
+                      <Text style={styles.intermediateName}>{st.name}</Text>
+                      {st.hasControllerAlert && (
+                        <View style={styles.controllerStopBadge}>
+                          <Text style={styles.controllerStopBadgeText}>
+                            🚨 Contrôle
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+                ))}
 
               {/* Alighting Stop (Ringed Circle) */}
               <View style={styles.nodeRow}>
@@ -618,33 +654,61 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
   },
-  intermediateList: {
+  fallbackStopsInfo: {
     marginTop: 6,
-    paddingLeft: 4,
-    gap: 6,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#5F6368',
   },
-  intermediateRow: {
+  intermediateNodeRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    minHeight: 30,
+  },
+  intermediateTimeCol: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#70757A',
+    paddingTop: 5,
+  },
+  intermediateBarSegment: {
+    flex: 1,
+    width: 5,
+  },
+  intermediateDotOnRail: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    borderWidth: 2.5,
+    backgroundColor: '#FFFFFF',
+    marginVertical: -1,
+    zIndex: 2,
+  },
+  intermediateInfoCol: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  intermediateDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    borderWidth: 2,
-    backgroundColor: '#FFFFFF',
-    marginRight: 8,
+    paddingLeft: 10,
+    paddingVertical: 5,
+    gap: 8,
   },
   intermediateName: {
     flex: 1,
     fontSize: 12,
     fontWeight: '600',
-    color: '#5F6368',
+    color: '#3C4043',
   },
-  intermediateTime: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#70757A',
-    marginLeft: 8,
+  controllerStopBadge: {
+    backgroundColor: '#FEF3F2',
+    borderWidth: 1,
+    borderColor: '#FECDCA',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  controllerStopBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#B42318',
   },
 });
