@@ -431,6 +431,32 @@ export function calculateDistanceMeters(
   return Math.round(R * c);
 }
 
+/**
+ * Calcule le cap (azimut en degrés, 0° = Nord, 90° = Est, 180° = Sud, 270° = Ouest)
+ * d'un point 1 vers un point 2.
+ */
+export function calculateBearing(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const toDeg = (rad: number) => (rad * 180) / Math.PI;
+
+  const dLon = toRad(lon2 - lon1);
+  const phi1 = toRad(lat1);
+  const phi2 = toRad(lat2);
+
+  const y = Math.sin(dLon) * Math.cos(phi2);
+  const x =
+    Math.cos(phi1) * Math.sin(phi2) -
+    Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLon);
+
+  const initialBearing = toDeg(Math.atan2(y, x));
+  return (Math.round(initialBearing) + 360) % 360;
+}
+
 export function getLineColor(lineId: string): string {
   const found = DIJON_LINES.find(l => l.id === lineId);
   if (found) return found.color;
