@@ -91,4 +91,22 @@ describe('Mobile Google Places Integration & Coordinate Resolution', () => {
     expect(detailsSpy).not.toHaveBeenCalled();
     expect(result).toEqual(alreadyResolved);
   });
+
+  it('provides instant query search results when hitting enter/search on keyboard', async () => {
+    vi.spyOn(apiService, 'fetchPlaceAutocomplete').mockResolvedValue([
+      {
+        placeId: 'divia-stop:hub-republique',
+        label: 'République',
+        secondaryText: 'Arrêt Divia (T1, T2) · Dijon',
+        type: 'stop',
+        latitude: 47.3262,
+        longitude: 5.0461,
+        source: 'divia_local',
+      },
+    ]);
+
+    const results = await geocodingService.searchAddresses('Republique');
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results[0].label).toContain('République');
+  });
 });

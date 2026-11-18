@@ -2,6 +2,7 @@ import * as Haptics from 'expo-haptics';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  Keyboard,
   Modal,
   PanResponder,
   ScrollView,
@@ -129,6 +130,7 @@ export const ReportBottomSheet: React.FC<ReportBottomSheetProps> = ({
   ).current;
 
   const triggerSubmit = (type: 'CONTROLLER' | 'CROWD', crowdLevel?: CrowdLevel) => {
+    Keyboard.dismiss();
     if (confirmationMessage) return;
 
     try {
@@ -298,6 +300,7 @@ export const ReportBottomSheet: React.FC<ReportBottomSheetProps> = ({
                       key={stop.id}
                       style={[styles.stopChip, active && styles.stopChipActive]}
                       onPress={() => {
+                        Keyboard.dismiss();
                         setSelectedStop(stop);
                         if (selectedLineId !== 'ALL' && !stop.lines.includes(selectedLineId)) {
                           handleSelectLine(stop.lines[0] || 'ALL');

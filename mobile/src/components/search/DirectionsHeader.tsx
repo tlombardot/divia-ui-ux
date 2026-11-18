@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
   ScrollView,
   StyleSheet,
   Text,
@@ -69,6 +70,7 @@ export const DirectionsHeader: React.FC<DirectionsHeaderProps> = ({
   }, [originText, destinationText, focusedField]);
 
   const handlePick = async (item: GeocodedAddress) => {
+    Keyboard.dismiss();
     if (!focusedField || isResolvingPlace) return;
     const targetField = focusedField;
 
@@ -87,10 +89,41 @@ export const DirectionsHeader: React.FC<DirectionsHeaderProps> = ({
   };
 
   const handlePickGps = () => {
+    Keyboard.dismiss();
     if (!focusedField) return;
     onUseCurrentLocation(focusedField);
     setFocusedField(null);
     setResults([]);
+  };
+
+  const handleClose = () => {
+    Keyboard.dismiss();
+    setFocusedField(null);
+    setResults([]);
+    onCloseDirections();
+  };
+
+  const handleSubmit = async (field: 'origin' | 'destination') => {
+    Keyboard.dismiss();
+    const query = field === 'origin' ? originText : destinationText;
+    if (!query || query.trim().length === 0) return;
+
+    if (results.length > 0) {
+      await handlePick(results[0]);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      const found = await geocodingService.searchAddresses(query);
+      if (found.length > 0) {
+        await handlePick(found[0]);
+      }
+    } finally {
+      setIsSearching(false);
+      setFocusedField(null);
+      setResults([]);
+    }
   };
 
   return (
@@ -99,7 +132,7 @@ export const DirectionsHeader: React.FC<DirectionsHeaderProps> = ({
         {/* Back button */}
         <TouchableOpacity
           style={styles.backBtn}
-          onPress={onCloseDirections}
+          onPress={handleClose}
           activeOpacity={0.7}
         >
           <Text style={styles.backIcon}>←</Text>
@@ -130,11 +163,17 @@ export const DirectionsHeader: React.FC<DirectionsHeaderProps> = ({
                 setFocusedField('origin');
               }}
               onFocus={() => setFocusedField('origin')}
+              returnKeyType="search"
+              onSubmitEditing={() => handleSubmit('origin')}
+              blurOnSubmit={true}
               autoCorrect={false}
               selectTextOnFocus
             />
             {originText.length > 0 && focusedField === 'origin' && (
-              <TouchableOpacity onPress={() => onOriginChange('')} style={styles.clearBtn}>
+              <TouchableOpacity
+                onPress={() => onOriginChange('')}
+                style={styles.clearBtn}
+              >
                 <Text style={styles.clearText}>✕</Text>
               </TouchableOpacity>
             )}
@@ -152,11 +191,17 @@ export const DirectionsHeader: React.FC<DirectionsHeaderProps> = ({
               }}
               onFocus={() => setFocusedField('destination')}
               autoFocus={autoFocusDestination}
+              returnKeyType="search"
+              onSubmitEditing={() => handleSubmit('destination')}
+              blurOnSubmit={true}
               autoCorrect={false}
               selectTextOnFocus
             />
             {destinationText.length > 0 && focusedField === 'destination' && (
-              <TouchableOpacity onPress={() => onDestinationChange('')} style={styles.clearBtn}>
+              <TouchableOpacity
+                onPress={() => onDestinationChange('')}
+                style={styles.clearBtn}
+              >
                 <Text style={styles.clearText}>✕</Text>
               </TouchableOpacity>
             )}
@@ -166,7 +211,10 @@ export const DirectionsHeader: React.FC<DirectionsHeaderProps> = ({
         {/* Swap Origin <-> Destination Button */}
         <TouchableOpacity
           style={styles.swapBtn}
-          onPress={onSwapOriginDestination}
+          onPress={() => {
+            Keyboard.dismiss();
+            onSwapOriginDestination();
+          }}
           activeOpacity={0.7}
         >
           <Text style={styles.swapIcon}>⇅</Text>
@@ -176,7 +224,11 @@ export const DirectionsHeader: React.FC<DirectionsHeaderProps> = ({
       {/* Autocomplete Suggestions Dropdown */}
       {focusedField && (
         <View style={styles.dropdown}>
-          <ScrollView keyboardShouldPersistTaps="handled" style={styles.dropdownScroll}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            style={styles.dropdownScroll}
+          >
             <TouchableOpacity
               style={styles.gpsRow}
               onPress={handlePickGps}

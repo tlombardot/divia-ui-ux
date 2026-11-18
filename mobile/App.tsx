@@ -1,7 +1,7 @@
 import * as Haptics from 'expo-haptics';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Keyboard, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import MapView from 'react-native-maps';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { LineFilterSheet } from './src/components/map/LineFilterSheet';
@@ -194,6 +194,7 @@ export default function App() {
   // Route directly to a stop (from quick chip or station sheet CTA)
   const handleRouteToStop = useCallback(
     (stop: TransitStop) => {
+      Keyboard.dismiss();
       const origin: CoordPoint = originPoint.isGps
         ? { lat: location.latitude, lng: location.longitude, label: 'Ma position', isGps: true }
         : originPoint;
@@ -215,6 +216,7 @@ export default function App() {
   // Address selection from BAN / Divia Autocomplete
   const handleSelectAddress = useCallback(
     (address: GeocodedAddress, field: 'origin' | 'destination') => {
+      Keyboard.dismiss();
       const point: CoordPoint = {
         lat: address.latitude,
         lng: address.longitude,
@@ -240,6 +242,7 @@ export default function App() {
   // Use real GPS position for origin or destination
   const handleUseCurrentLocation = useCallback(
     (field: 'origin' | 'destination') => {
+      Keyboard.dismiss();
       const gpsPoint: CoordPoint = {
         lat: location.latitude,
         lng: location.longitude,
@@ -263,6 +266,7 @@ export default function App() {
 
   // Swap Origin <-> Destination
   const handleSwapOriginDestination = useCallback(() => {
+    Keyboard.dismiss();
     if (!destinationPoint) return;
     const newOrigin = destinationPoint;
     const newDest = originPoint;
@@ -274,6 +278,7 @@ export default function App() {
   }, [originPoint, destinationPoint, fetchRouteAlternatives]);
 
   const handleCloseDirections = useCallback(() => {
+    Keyboard.dismiss();
     setUiMode('explore');
     setSheetSnap('peek');
     setAvailableRoutes([]);
@@ -290,6 +295,7 @@ export default function App() {
 
   const handleSelectRouteCard = useCallback(
     (route: RouteOption) => {
+      Keyboard.dismiss();
       setSelectedRoute(route);
       fitMapToRoute(route);
       setUiMode('timeline');
@@ -299,6 +305,7 @@ export default function App() {
   );
 
   const handleStartNavigation = useCallback(() => {
+    Keyboard.dismiss();
     if (!selectedRoute) return;
     startNavigation(selectedRoute);
     setIsFollowingUser(true);
@@ -448,7 +455,10 @@ export default function App() {
           }}
           onSelectStop={handleSelectStation}
           onRecenter={handleRecenter}
-          onMapPanDrag={() => setIsFollowingUser(false)}
+          onMapPanDrag={() => {
+            Keyboard.dismiss();
+            setIsFollowingUser(false);
+          }}
         />
 
         {/* Top Explore Search Bar OR Connected Directions Header */}
@@ -481,7 +491,10 @@ export default function App() {
         {!isNavigating && (
           <ThreeStateBottomSheet
             snapState={sheetSnap}
-            onSnapChange={setSheetSnap}
+            onSnapChange={snap => {
+              Keyboard.dismiss();
+              setSheetSnap(snap);
+            }}
             footer={
               uiMode === 'timeline' && selectedRoute ? (
                 <TouchableOpacity

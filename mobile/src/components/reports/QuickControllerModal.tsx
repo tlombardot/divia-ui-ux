@@ -1,6 +1,7 @@
 import * as Haptics from 'expo-haptics';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -100,6 +101,7 @@ export const QuickControllerModal: React.FC<QuickControllerModalProps> = ({
 
   // 6. Handle stop selection
   const handleSelectStop = (stop: TransitStop) => {
+    Keyboard.dismiss();
     setSelectedStop(stop);
     setIsChangingStop(false);
     setSearchQuery('');
@@ -109,6 +111,7 @@ export const QuickControllerModal: React.FC<QuickControllerModalProps> = ({
 
   // 7. Handle 1-tap submission
   const handleSubmit = async () => {
+    Keyboard.dismiss();
     if (isSubmitting || isSubmitted) return;
     setIsSubmitting(true);
 
