@@ -38,19 +38,28 @@ describe('Server Network, Reverse-Proxy & Tunnel CORS Configuration', () => {
     expect(isOriginAllowed(undefined, { nodeEnv: 'production', corsOrigin: 'https://app.diviakhaaa.fr' })).toBe(true);
   });
 
-  it('allows development tunnel domains and exp:// only when NODE_ENV !== production', () => {
+  it('allows development tunnel domains, private LAN IPs and exp:// only when NODE_ENV !== production', () => {
     const devOrigins = [
       'https://abc123.lhr.life',
       'https://my-tunnel-42.loca.lt',
       'https://9f21-193-52.ngrok-free.app',
+      'https://random-demo.trycloudflare.com',
       'exp://192.168.1.42:8081',
       'http://localhost:8081',
+      'http://10.21.40.29:8081',
+      'http://192.168.1.50:8081',
+      'http://172.16.0.10:8081',
+      'http://172.31.255.4:3000',
     ];
 
     for (const origin of devOrigins) {
       expect(isOriginAllowed(origin, { nodeEnv: 'development', corsOrigin: '' })).toBe(true);
       expect(isOriginAllowed(origin, { nodeEnv: 'production', corsOrigin: '' })).toBe(false);
     }
+
+    // Non-RFC1918 172.x addresses must not be treated as private LAN
+    expect(isOriginAllowed('http://172.15.0.1:8081', { nodeEnv: 'development', corsOrigin: '' })).toBe(false);
+    expect(isOriginAllowed('http://172.32.0.1:8081', { nodeEnv: 'development', corsOrigin: '' })).toBe(false);
   });
 
   it('rejects spoofed tunnel hostnames and wildcard * in production', () => {

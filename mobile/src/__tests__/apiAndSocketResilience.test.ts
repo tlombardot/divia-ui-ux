@@ -4,7 +4,10 @@ import {
   buildApiDiagnosticMessage,
   cleanApiUrl,
   DEFAULT_API_TIMEOUT_MS,
+  extractHostFromExpoUri,
   getBaseApiUrl,
+  resetLoggedBackendUrl,
+  resolveExpoLanHost,
   TUNNEL_BYPASS_HEADERS,
 } from '../services/apiService';
 import { buildSocketOptions } from '../services/socketService';
@@ -14,6 +17,7 @@ describe('Mobile API & Socket Tunnel Resilience', () => {
 
   beforeEach(() => {
     delete process.env.EXPO_PUBLIC_API_URL;
+    resetLoggedBackendUrl();
   });
 
   afterEach(() => {
@@ -26,6 +30,7 @@ describe('Mobile API & Socket Tunnel Resilience', () => {
   });
 
   it('cleans EXPO_PUBLIC_API_URL by trimming spaces and removing trailing slashes', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     expect(cleanApiUrl('  https://abc123.lhr.life///  ')).toBe('https://abc123.lhr.life');
 
     process.env.EXPO_PUBLIC_API_URL = '  https://my-tunnel.loca.lt/  ';
@@ -34,6 +39,27 @@ describe('Mobile API & Socket Tunnel Resilience', () => {
     process.env.EXPO_PUBLIC_API_URL = '   ';
     // Blank EXPO_PUBLIC_API_URL falls back to mocked expo-constants hostUri (192.168.1.50:8081)
     expect(getBaseApiUrl()).toBe('http://192.168.1.50:3000');
+    expect(logSpy).toHaveBeenCalledWith('[Network] Backend cible : http://192.168.1.50:3000');
+  });
+
+  it('extracts local LAN IPv4 from expoConfig.hostUri or manifest2.extra.expoGo.debuggerHost', () => {
+    expect(extractHostFromExpoUri('10.21.40.29:8081')).toBe('10.21.40.29');
+    expect(extractHostFromExpoUri('exp://192.168.1.42:8081')).toBe('192.168.1.42');
+    expect(extractHostFromExpoUri('')).toBeNull();
+
+    expect(
+      resolveExpoLanHost({
+        expoConfig: null,
+        manifest2: { extra: { expoGo: { debuggerHost: '10.21.40.29:8081' } } },
+      })
+    ).toBe('10.21.40.29');
+
+    expect(
+      resolveExpoLanHost({
+        expoConfig: { hostUri: '192.168.0.15:8081' },
+        manifest2: { extra: { expoGo: { debuggerHost: '10.0.0.2:8081' } } },
+      })
+    ).toBe('192.168.0.15');
   });
 
   it('sends localtunnel & ngrok bypass headers and AbortSignal on API fetch calls', async () => {

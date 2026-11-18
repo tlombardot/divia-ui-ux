@@ -6,6 +6,17 @@ export const ALLOWED_CORS_HEADERS: string[] = [
   'ngrok-skip-browser-warning',
 ];
 
+const IPV4_OCTET = '(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)';
+
+const DEV_PRIVATE_LAN_ORIGIN_PATTERNS: RegExp[] = [
+  new RegExp(`^https?:\\/\\/10\\.${IPV4_OCTET}\\.${IPV4_OCTET}\\.${IPV4_OCTET}(:\\d+)?$`, 'i'),
+  new RegExp(`^https?:\\/\\/192\\.168\\.${IPV4_OCTET}\\.${IPV4_OCTET}(:\\d+)?$`, 'i'),
+  new RegExp(
+    `^https?:\\/\\/172\\.(1[6-9]|2\\d|3[0-1])\\.${IPV4_OCTET}\\.${IPV4_OCTET}(:\\d+)?$`,
+    'i'
+  ),
+];
+
 const DEV_TUNNEL_ORIGIN_PATTERNS: RegExp[] = [
   /^https?:\/\/([a-z0-9-]+\.)+lhr\.life(:\d+)?$/i,
   /^https?:\/\/([a-z0-9-]+\.)+loca\.lt(:\d+)?$/i,
@@ -14,6 +25,7 @@ const DEV_TUNNEL_ORIGIN_PATTERNS: RegExp[] = [
   /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i,
   /^exp:\/\/[^\s]+$/i,
   /^exps:\/\/[^\s]+$/i,
+  ...DEV_PRIVATE_LAN_ORIGIN_PATTERNS,
 ];
 
 export interface CorsConfigOptions {

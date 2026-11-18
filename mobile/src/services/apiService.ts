@@ -27,28 +27,109 @@ export function cleanApiUrl(rawUrl: string): string {
   return rawUrl.trim().replace(/\/+$/, '');
 }
 
+interface ExpoConstantsManifestLike {
+  expoConfig?: {
+    hostUri?: string | null;
+  } | null;
+  manifest2?: {
+    extra?: {
+      expoGo?: {
+        debuggerHost?: string | null;
+      } | null;
+    } | null;
+  } | null;
+  expoGoConfig?: {
+    debuggerHost?: string | null;
+  } | null;
+}
+
+const IPV4_REGEX =
+  /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
+
 /**
- * Hybrid connection resolver:
- * 1. Checks EXPO_PUBLIC_API_URL if configured (trimmed, without trailing slash)
- * 2. Dynamically extracts local machine IP from Constants.expoConfig?.hostUri
- *    to work automatically in Expo Go on physical phones without hardcoding.
- * 3. Falls back to http://localhost:3000
+ * Extracts the IPv4 (or hostname) from an Expo hostUri / debuggerHost value
+ * such as "192.168.1.50:8081" or "exp://10.21.40.29:8081".
  */
-export function getBaseApiUrl(): string {
-  const envUrl = process.env.EXPO_PUBLIC_API_URL;
-  if (envUrl && envUrl.trim().length > 0) {
-    return cleanApiUrl(envUrl);
+export function extractHostFromExpoUri(rawHostUri?: string | null): string | null {
+  if (!rawHostUri) {
+    return null;
   }
 
-  const hostUri = Constants.expoConfig?.hostUri;
-  if (hostUri) {
-    const host = hostUri.split(':')[0]?.trim();
+  const withoutScheme = rawHostUri.trim().replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '');
+  const hostPort = withoutScheme.split('/')[0]?.trim() ?? '';
+  const host = hostPort.split(':')[0]?.trim() ?? '';
+
+  if (!host) {
+    return null;
+  }
+
+  if (IPV4_REGEX.test(host)) {
+    return host;
+  }
+
+  return host;
+}
+
+/**
+ * Resolves the local machine IP from Expo Go runtime constants:
+ * 1. Constants.expoConfig?.hostUri
+ * 2. Constants.manifest2?.extra?.expoGo?.debuggerHost
+ * 3. Constants.expoGoConfig?.debuggerHost
+ */
+export function resolveExpoLanHost(
+  constantsSource: ExpoConstantsManifestLike = Constants as unknown as ExpoConstantsManifestLike
+): string | null {
+  const candidates: Array<string | null | undefined> = [
+    constantsSource.expoConfig?.hostUri,
+    constantsSource.manifest2?.extra?.expoGo?.debuggerHost,
+    constantsSource.expoGoConfig?.debuggerHost,
+  ];
+
+  for (const candidate of candidates) {
+    const host = extractHostFromExpoUri(candidate);
     if (host) {
-      return `http://${host}:3000`;
+      return host;
     }
   }
 
-  return 'http://localhost:3000';
+  return null;
+}
+
+let lastLoggedBackendUrl: string | null = null;
+
+export function resetLoggedBackendUrl(): void {
+  lastLoggedBackendUrl = null;
+}
+
+function logBackendTargetOnce(url: string): void {
+  if (lastLoggedBackendUrl !== url) {
+    lastLoggedBackendUrl = url;
+    console.log(`[Network] Backend cible : ${url}`);
+  }
+}
+
+/**
+ * Hybrid connection resolver:
+ * 1. Checks EXPO_PUBLIC_API_URL if configured (trimmed, without trailing slash)
+ * 2. Dynamically extracts local machine IPv4 from Constants.expoConfig?.hostUri
+ *    or Constants.manifest2?.extra?.expoGo?.debuggerHost -> http://<IP_LOCALE>:3000
+ * 3. Falls back to http://localhost:3000
+ */
+export function getBaseApiUrl(): string {
+  let resolvedUrl = 'http://localhost:3000';
+
+  const envUrl = process.env.EXPO_PUBLIC_API_URL;
+  if (envUrl && envUrl.trim().length > 0) {
+    resolvedUrl = cleanApiUrl(envUrl);
+  } else {
+    const lanHost = resolveExpoLanHost();
+    if (lanHost) {
+      resolvedUrl = `http://${lanHost}:3000`;
+    }
+  }
+
+  logBackendTargetOnce(resolvedUrl);
+  return resolvedUrl;
 }
 
 export function buildApiDiagnosticMessage(
