@@ -6,11 +6,13 @@ import {
 import {
   CrowdLevel,
   CrowdStatus,
+  IntermediateStopInfo,
   Report,
   RouteOption,
   RouteQuery,
   RouteSegment,
   RouteStep,
+  TransitLine,
   TransitStop,
 } from '../types';
 import { buildRoutePredictiveAlerts } from './controllerTrackerService';
@@ -172,12 +174,287 @@ function formatHHMM(date: Date): string {
   return `${h}:${m}`;
 }
 
+const MAX_GPS_STOP_MATCH_METERS = 180;
+
+const STOP_NAME_PARASITE_WORDS = new Set([
+  'dijon',
+  'place',
+  'arret',
+  'station',
+  'avenue',
+  'rue',
+  'boulevard',
+  'bd',
+  'av',
+  'pl',
+  'tram',
+  'tramway',
+  'bus',
+  'de',
+  'du',
+  'la',
+  'le',
+  'les',
+  'l',
+  'd',
+]);
+
 function normalizeText(value: string): string {
   return value
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Soft stop name normalization for fuzzy matching between Google Transit stop names
+ * and local Divia stops:
+ * - Lowercases and removes accents
+ * - Normalizes known Dijon synonyms ("Gare SNCF", "Gare de Dijon", "Dijon Ville" <-> "Dijon Gare")
+ * - Strips parasite prefixes/words ("dijon", "place", "arrêt", "station", "avenue", "rue", articles)
+ */
+export function normalizeStopNameForMatching(rawName: string): string {
+  const ascii = rawName
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+  if (!ascii) {
+    return '';
+  }
+
+  // Normalize Dijon Gare synonyms without disturbing "Foch Gare"
+  let withSynonyms = ascii
+    .replace(/\bgare\s+sncf\b/g, 'dijon gare')
+    .replace(/\bgare\s+de\s+dijon(\s+ville)?\b/g, 'dijon gare')
+    .replace(/\bgare\s+dijon(\s+ville)?\b/g, 'dijon gare')
+    .replace(/\bdijon\s+gare\s+sncf\b/g, 'dijon gare')
+    .replace(/\bdijon\s+ville\b/g, 'dijon gare');
+
+  // If the entire string is literally "sncf", treat as "dijon gare"
+  if (withSynonyms === 'sncf') {
+    withSynonyms = 'dijon gare';
+  }
+
+  const tokens = withSynonyms
+    .split(/\s+/)
+    .filter(token => token.length > 0 && !STOP_NAME_PARASITE_WORDS.has(token));
+
+  return tokens.join(' ');
+}
+
+function findClosestStopIndexByGps(
+  stops: TransitStop[],
+  coords: GoogleLatLng,
+  maxDistanceMeters: number
+): number {
+  let bestIndex = -1;
+  let bestDistance = maxDistanceMeters;
+
+  for (let i = 0; i < stops.length; i++) {
+    const dist = calculateDistanceMeters(
+      coords.latitude,
+      coords.longitude,
+      stops[i].latitude,
+      stops[i].longitude
+    );
+    if (dist < bestDistance) {
+      bestDistance = dist;
+      bestIndex = i;
+    }
+  }
+
+  return bestIndex;
+}
+
+/**
+ * Hybrid resolver locating a boarding or alighting stop index on a local Divia line:
+ * 1. Exact fuzzy-normalized name match ("Place Darcy" -> "Darcy", "Gare SNCF" -> "Dijon Gare")
+ * 2. Partial token/substring match (disambiguated by GPS when multiple candidates exist)
+ * 3. Mandatory GPS fallback via Haversine distance (< 180m)
+ */
+export function resolveStopIndexOnLine(
+  line: TransitLine,
+  stopName?: string,
+  coords?: GoogleLatLng
+): number {
+  const stops = line.stops;
+  if (!stops || stops.length === 0) {
+    return -1;
+  }
+
+  const normalizedQuery = stopName ? normalizeStopNameForMatching(stopName) : '';
+
+  if (normalizedQuery.length > 0) {
+    // 1. Exact normalized match
+    const exactMatches: number[] = [];
+    for (let i = 0; i < stops.length; i++) {
+      if (normalizeStopNameForMatching(stops[i].name) === normalizedQuery) {
+        exactMatches.push(i);
+      }
+    }
+
+    if (exactMatches.length === 1) {
+      return exactMatches[0];
+    }
+
+    if (exactMatches.length > 1 && coords) {
+      let bestIdx = exactMatches[0];
+      let bestDist = Infinity;
+      for (const idx of exactMatches) {
+        const dist = calculateDistanceMeters(
+          coords.latitude,
+          coords.longitude,
+          stops[idx].latitude,
+          stops[idx].longitude
+        );
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestIdx = idx;
+        }
+      }
+      return bestIdx;
+    }
+
+    // 2. Substring / token match (e.g. "Godrans" <-> "Godrans Les Halles", "Monge" <-> "Monge Cité...")
+    const partialMatches: number[] = [];
+    for (let i = 0; i < stops.length; i++) {
+      const stopNorm = normalizeStopNameForMatching(stops[i].name);
+      if (
+        stopNorm.length > 0 &&
+        (stopNorm.includes(normalizedQuery) || normalizedQuery.includes(stopNorm))
+      ) {
+        partialMatches.push(i);
+      }
+    }
+
+    if (partialMatches.length === 1) {
+      const candidateIdx = partialMatches[0];
+      // If GPS coordinates are provided and clearly point elsewhere (< 180m to another stop, > 600m from partial match), prefer GPS
+      if (coords) {
+        const distToCandidate = calculateDistanceMeters(
+          coords.latitude,
+          coords.longitude,
+          stops[candidateIdx].latitude,
+          stops[candidateIdx].longitude
+        );
+        if (distToCandidate > 600) {
+          const gpsIdx = findClosestStopIndexByGps(stops, coords, MAX_GPS_STOP_MATCH_METERS);
+          if (gpsIdx !== -1) {
+            return gpsIdx;
+          }
+        }
+      }
+      return candidateIdx;
+    }
+
+    if (partialMatches.length > 1 && coords) {
+      let bestIdx = partialMatches[0];
+      let bestDist = Infinity;
+      for (const idx of partialMatches) {
+        const dist = calculateDistanceMeters(
+          coords.latitude,
+          coords.longitude,
+          stops[idx].latitude,
+          stops[idx].longitude
+        );
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestIdx = idx;
+        }
+      }
+      if (bestDist < 600) {
+        return bestIdx;
+      }
+    }
+  }
+
+  // 3. Mandatory GPS fallback (< 180 meters Haversine)
+  if (coords && Number.isFinite(coords.latitude) && Number.isFinite(coords.longitude)) {
+    return findClosestStopIndexByGps(stops, coords, MAX_GPS_STOP_MATCH_METERS);
+  }
+
+  return -1;
+}
+
+export function isControllerNearStop(
+  stop: Pick<TransitStop, 'id' | 'latitude' | 'longitude'>,
+  lineId: string,
+  activeControllers: Report[]
+): boolean {
+  const upperLine = lineId.toUpperCase().trim();
+  return activeControllers.some(rep => {
+    if (rep.stopId === stop.id || rep.progression?.currentStopId === stop.id) {
+      return true;
+    }
+    const dist = calculateDistanceMeters(
+      stop.latitude,
+      stop.longitude,
+      rep.latitude,
+      rep.longitude
+    );
+    if (dist <= 120) {
+      return true;
+    }
+    return rep.lineId.toUpperCase().trim() === upperLine && dist <= MAX_GPS_STOP_MATCH_METERS;
+  });
+}
+
+/**
+ * Reconstructs ordered intermediate stops (forward OR reversed return direction) for a
+ * Google Routes API v2 TRANSIT leg using hybrid fuzzy-name + GPS matching and linearly
+ * interpolated estimated passing times.
+ */
+export function resolveIntermediateStopsForTransitLeg(
+  lineId: string,
+  depStopRaw: GoogleTransitStop | undefined,
+  arrStopRaw: GoogleTransitStop | undefined,
+  depDate: Date,
+  arrDate: Date,
+  activeControllers: Report[] = reportService.getActiveControllerReports(),
+  linesCatalog: TransitLine[] = DIJON_LINES
+): IntermediateStopInfo[] {
+  const normalizedLineId = lineId.toUpperCase().trim();
+  const line = linesCatalog.find(l => l.id.toUpperCase() === normalizedLineId);
+  if (!line || line.stops.length < 3) {
+    return [];
+  }
+
+  const boardIndex = resolveStopIndexOnLine(line, depStopRaw?.name, depStopRaw?.location?.latLng);
+  const alightIndex = resolveStopIndexOnLine(line, arrStopRaw?.name, arrStopRaw?.location?.latLng);
+
+  if (boardIndex === -1 || alightIndex === -1 || boardIndex === alightIndex) {
+    return [];
+  }
+
+  const orderedIntermediates: TransitStop[] =
+    boardIndex < alightIndex
+      ? line.stops.slice(boardIndex + 1, alightIndex)
+      : line.stops.slice(alightIndex + 1, boardIndex).reverse();
+
+  if (orderedIntermediates.length === 0) {
+    return [];
+  }
+
+  const totalMs = Math.max(0, arrDate.getTime() - depDate.getTime());
+  const totalIntervals = orderedIntermediates.length + 1;
+
+  return orderedIntermediates.map((stop, idx) => {
+    const estimatedDate = new Date(
+      depDate.getTime() + Math.round((totalMs * (idx + 1)) / totalIntervals)
+    );
+    return {
+      id: stop.id,
+      name: stop.name,
+      latitude: stop.latitude,
+      longitude: stop.longitude,
+      estimatedTime: formatHHMM(estimatedDate),
+      hasControllerAlert: isControllerNearStop(stop, normalizedLineId, activeControllers),
+    };
+  });
 }
 
 function resolveDiviaLineColor(lineShortName: string, googleColor?: string): string {
@@ -191,9 +468,18 @@ function resolveDiviaLineColor(lineShortName: string, googleColor?: string): str
 }
 
 function resolveLocalStopId(stopName: string, lat: number, lng: number): string {
-  const norm = normalizeText(stopName);
+  const norm = normalizeStopNameForMatching(stopName);
+  const byExact = ALL_DIJON_STOPS.find(
+    s => norm.length > 0 && normalizeStopNameForMatching(s.name) === norm
+  );
+  if (byExact) return byExact.id;
+
+  const fallbackNorm = normalizeText(stopName);
   const byName = ALL_DIJON_STOPS.find(
-    s => normalizeText(s.name) === norm || normalizeText(s.name).includes(norm) || norm.includes(normalizeText(s.name))
+    s =>
+      normalizeText(s.name) === fallbackNorm ||
+      (fallbackNorm.length > 0 &&
+        (normalizeText(s.name).includes(fallbackNorm) || fallbackNorm.includes(normalizeText(s.name))))
   );
   if (byName) return byName.id;
 
@@ -307,6 +593,8 @@ export function mapGoogleRouteToRouteOption(
   let firstTransitDepartureDate: Date | null = null;
   let firstHeadwayMinutes: number | undefined;
   let cursorTime = new Date(nowDate.getTime());
+
+  const activeControllers = reportService.getActiveControllerReports(nowDate.getTime());
 
   const hasAnyTransit = leg.steps.some(
     s => s.travelMode === 'TRANSIT' && Boolean(s.transitDetails)
@@ -465,7 +753,44 @@ export function mapGoogleRouteToRouteOption(
       const directionText = td.headsign
         ? `Direction ${td.headsign}`
         : td.transitLine?.name || `Ligne ${lineShort}`;
-      const stopCount = Math.max(1, td.stopCount ?? 2);
+
+      // Reconstruct bidirectional intermediate stops with hybrid fuzzy-name + GPS fallback
+      const intermediateStops = resolveIntermediateStopsForTransitLeg(
+        lineShort,
+        depStopRaw,
+        arrStopRaw,
+        depDate,
+        arrDate,
+        activeControllers
+      );
+
+      const intermediateTransitStops: TransitStop[] = intermediateStops.map(st => ({
+        id: st.id,
+        name: st.name,
+        latitude: st.latitude,
+        longitude: st.longitude,
+        lines: [lineShort],
+      }));
+
+      for (const st of intermediateStops) {
+        stopIdsUsed.push(st.id);
+        transitAnchorPoints.push([st.latitude, st.longitude]);
+      }
+
+      const passedStops: TransitStop[] = [fromStop, ...intermediateTransitStops, toStop];
+      const departureTimeText =
+        td.localizedValues?.departureTime?.time?.text || formatHHMM(depDate);
+      const arrivalTimeText =
+        td.localizedValues?.arrivalTime?.time?.text || formatHHMM(arrDate);
+      const estimatedStopTimes: string[] = [
+        departureTimeText,
+        ...intermediateStops.map(st => st.estimatedTime),
+        arrivalTimeText,
+      ];
+      const stopCount =
+        typeof td.stopCount === 'number' && td.stopCount > 0
+          ? td.stopCount
+          : Math.max(1, passedStops.length - 1);
 
       // Fuse real-time Waze crowd status onto this Google Transit segment
       const segCrowdStatus = reportService.getStationCrowdStatus(
@@ -494,12 +819,11 @@ export function mapGoogleRouteToRouteOption(
         fromStop,
         toStop,
         stopsCount: stopCount,
-        passedStops: [fromStop, toStop],
-        estimatedStopTimes: [formatHHMM(depDate), formatHHMM(arrDate)],
-        departureTime:
-          td.localizedValues?.departureTime?.time?.text || formatHHMM(depDate),
-        arrivalTime:
-          td.localizedValues?.arrivalTime?.time?.text || formatHHMM(arrDate),
+        passedStops,
+        intermediateStops,
+        estimatedStopTimes,
+        departureTime: departureTimeText,
+        arrivalTime: arrivalTimeText,
         crowdStatus: segCrowdStatus,
       });
 

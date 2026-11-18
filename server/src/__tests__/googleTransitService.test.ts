@@ -1,13 +1,17 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { DIJON_LINES } from '../data/dijonNetwork';
 import {
   computeGoogleTransitRoutes,
   decodeGooglePolyline,
   decodeGooglePolylineLatLng,
   GoogleRoute,
   mapGoogleRouteToRouteOption,
+  normalizeStopNameForMatching,
+  resolveIntermediateStopsForTransitLeg,
+  resolveStopIndexOnLine,
 } from '../services/googleTransitService';
 import { getPlaceDetails } from '../services/googlePlacesService';
-import { placeDetailsQuerySchema, placesAutocompleteQuerySchema } from '../types';
+import { placeDetailsQuerySchema, placesAutocompleteQuerySchema, Report } from '../types';
 
 /**
  * Helper: standard Google Polyline encoder for deterministic Dijon test vectors
@@ -393,5 +397,187 @@ describe('GoogleTransitService — Polyline decoding, TransitDetails mapping & W
     expect(banDetails).not.toBeNull();
     expect(banDetails?.label).toBe('Place de la Libération, Dijon');
     expect(banDetails?.latitude).toBeCloseTo(47.3215, 4);
+  });
+
+  it('resolves intermediate stops in forward (Aller) direction with linear estimated times and controller alerts', () => {
+    const depDate = new Date(2026, 10, 18, 14, 0, 0);
+    const arrDate = new Date(2026, 10, 18, 14, 12, 0); // 12 min across 4 intervals -> +3 min/stop
+
+    const mockControllerAtGodrans: Report = {
+      id: 'ctrl-godrans-test',
+      type: 'CONTROLLER',
+      stopId: 'hub-godrans',
+      stopName: 'Godrans Les Halles',
+      lineId: 'T1',
+      lineName: 'Tramway T1',
+      latitude: 47.3232,
+      longitude: 5.0401,
+      direction: 'Dir. Quetigny Centre',
+      reportedAt: depDate.getTime(),
+      expiresAt: depDate.getTime() + 40 * 60 * 1000,
+      upvotes: 2,
+      downvotes: 0,
+      reliabilityScore: 90,
+      status: 'active',
+    };
+
+    const intermediates = resolveIntermediateStopsForTransitLeg(
+      'T1',
+      { name: 'Dijon Gare', location: { latLng: { latitude: 47.3236, longitude: 5.0278 } } },
+      { name: 'République', location: { latLng: { latitude: 47.3262, longitude: 5.0461 } } },
+      depDate,
+      arrDate,
+      [mockControllerAtGodrans]
+    );
+
+    expect(intermediates.map(s => s.name)).toEqual([
+      'Foch Gare',
+      'Darcy',
+      'Godrans Les Halles',
+    ]);
+    expect(intermediates.map(s => s.estimatedTime)).toEqual(['14:03', '14:06', '14:09']);
+    expect(intermediates[0].hasControllerAlert).toBe(false);
+    expect(intermediates[1].hasControllerAlert).toBe(false);
+    expect(intermediates[2].hasControllerAlert).toBe(true);
+  });
+
+  it('resolves intermediate stops in reversed return (Retour) direction without returning empty array', () => {
+    const depDate = new Date(2026, 10, 18, 15, 0, 0);
+    const arrDate = new Date(2026, 10, 18, 15, 16, 0);
+
+    // T1 Retour: République (index 4) -> Dijon Gare (index 0)
+    const intermediates = resolveIntermediateStopsForTransitLeg(
+      'T1',
+      { name: 'Station République', location: { latLng: { latitude: 47.3262, longitude: 5.0461 } } },
+      { name: 'Gare SNCF', location: { latLng: { latitude: 47.3236, longitude: 5.0278 } } },
+      depDate,
+      arrDate,
+      []
+    );
+
+    expect(intermediates.map(s => s.name)).toEqual([
+      'Godrans Les Halles',
+      'Darcy',
+      'Foch Gare',
+    ]);
+    expect(intermediates.map(s => s.estimatedTime)).toEqual(['15:04', '15:08', '15:12']);
+  });
+
+  it('matches Google stop name variations via fuzzy normalization and mandatory <180m GPS fallback', () => {
+    const lineT1 = DIJON_LINES.find(l => l.id === 'T1');
+    expect(lineT1).toBeDefined();
+    if (!lineT1) return;
+
+    // Fuzzy normalization: parasite words & synonyms
+    expect(normalizeStopNameForMatching('Place Darcy')).toBe('darcy');
+    expect(normalizeStopNameForMatching('Gare SNCF')).toBe('gare');
+    expect(normalizeStopNameForMatching('Dijon Gare')).toBe('gare');
+    expect(normalizeStopNameForMatching('Arrêt Avenue Poincaré')).toBe('poincare');
+
+    const idxGare = resolveStopIndexOnLine(lineT1, 'Gare SNCF');
+    const idxDarcy = resolveStopIndexOnLine(lineT1, 'Place Darcy');
+    const idxFoch = resolveStopIndexOnLine(lineT1, 'Foch Gare');
+    expect(lineT1.stops[idxGare].id).toBe('hub-gare');
+    expect(lineT1.stops[idxDarcy].id).toBe('hub-darcy');
+    expect(lineT1.stops[idxFoch].id).toBe('t1-foch');
+
+    // GPS fallback (< 180m): unrecognizable Google stop label near Godrans (~45m away)
+    const idxByGps = resolveStopIndexOnLine(lineT1, 'Arrêt Inconnu Quai Nord', {
+      latitude: 47.3235,
+      longitude: 5.0404,
+    });
+    expect(lineT1.stops[idxByGps].id).toBe('hub-godrans');
+
+    // GPS fallback rejected when > 180m away from every stop on line
+    const idxTooFar = resolveStopIndexOnLine(lineT1, 'Arrêt Hors Zone', {
+      latitude: 47.38,
+      longitude: 5.15,
+    });
+    expect(idxTooFar).toBe(-1);
+  });
+
+  it('populates intermediateStops, passedStops and estimatedStopTimes in mapGoogleRouteToRouteOption for return trips and preserves stopCount for unknown secondary lines', () => {
+    const depIso = new Date(2026, 10, 18, 16, 0, 0).toISOString();
+    const arrIso = new Date(2026, 10, 18, 16, 12, 0).toISOString();
+
+    const reverseRoute: GoogleRoute = {
+      duration: '720s',
+      distanceMeters: 2100,
+      legs: [
+        {
+          duration: '720s',
+          distanceMeters: 2100,
+          steps: [
+            {
+              travelMode: 'TRANSIT',
+              staticDuration: '720s',
+              distanceMeters: 2100,
+              transitDetails: {
+                headsign: 'Dijon Gare',
+                stopCount: 4,
+                transitLine: { name: 'Tramway T1', nameShort: 'T1', color: '#E11535', vehicle: { type: 'TRAM' } },
+                stopDetails: {
+                  departureStop: {
+                    name: 'Place de la République',
+                    location: { latLng: { latitude: 47.3262, longitude: 5.0461 } },
+                  },
+                  arrivalStop: {
+                    name: 'Gare SNCF',
+                    location: { latLng: { latitude: 47.3236, longitude: 5.0278 } },
+                  },
+                  departureTime: depIso,
+                  arrivalTime: arrIso,
+                },
+              },
+            },
+            {
+              travelMode: 'TRANSIT',
+              staticDuration: '480s',
+              distanceMeters: 1800,
+              transitDetails: {
+                headsign: 'Perrigny',
+                stopCount: 5,
+                transitLine: { name: 'Bus B99', nameShort: 'B99', color: '#0066AA', vehicle: { type: 'BUS' } },
+                stopDetails: {
+                  departureStop: {
+                    name: 'Arrêt Secondaire A',
+                    location: { latLng: { latitude: 47.28, longitude: 5.01 } },
+                  },
+                  arrivalStop: {
+                    name: 'Arrêt Secondaire B',
+                    location: { latLng: { latitude: 47.26, longitude: 5.0 } },
+                  },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const option = mapGoogleRouteToRouteOption(reverseRoute, 0, new Date(2026, 10, 18, 15, 58, 0));
+    expect(option).not.toBeNull();
+    if (!option) return;
+
+    const t1Seg = option.segments[0];
+    expect(t1Seg.intermediateStops?.map(s => s.name)).toEqual([
+      'Godrans Les Halles',
+      'Darcy',
+      'Foch Gare',
+    ]);
+    expect(t1Seg.passedStops?.map(s => s.name)).toEqual([
+      'Place de la République',
+      'Godrans Les Halles',
+      'Darcy',
+      'Foch Gare',
+      'Gare SNCF',
+    ]);
+    expect(t1Seg.estimatedStopTimes).toHaveLength(5);
+    expect(t1Seg.intermediateStops?.map(s => s.estimatedTime)).toEqual(['16:03', '16:06', '16:09']);
+
+    // Unknown secondary line preserves stopCount=5 for UI safety net
+    const secondarySeg = option.segments[1];
+    expect(secondarySeg.intermediateStops).toEqual([]);
+    expect(secondarySeg.stopsCount).toBe(5);
   });
 });

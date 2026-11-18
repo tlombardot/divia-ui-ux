@@ -5,6 +5,7 @@ import {
 import {
   CrowdLevel,
   CrowdStatus,
+  IntermediateStopInfo,
   Report,
   RouteOption,
   RouteQuery,
@@ -19,6 +20,7 @@ import {
   sliceLineGeometry,
 } from '../utils/geometryTopology';
 import { buildRoutePredictiveAlerts } from './controllerTrackerService';
+import { isControllerNearStop } from './googleTransitService';
 import { networkGeometryService } from './networkGeometryService';
 import { getPedestrianRoute, PedestrianRoute } from './pedestrianService';
 import { reportService } from './reportService';
@@ -75,6 +77,26 @@ function formatTime(date: Date): string {
   const h = date.getHours().toString().padStart(2, '0');
   const m = date.getMinutes().toString().padStart(2, '0');
   return `${h}:${m}`;
+}
+
+function buildIntermediateStopsInfo(
+  passedStops: TransitStop[],
+  estimatedStopTimes: string[],
+  lineId: string,
+  activeControllers: Report[]
+): IntermediateStopInfo[] {
+  if (passedStops.length <= 2) {
+    return [];
+  }
+
+  return passedStops.slice(1, -1).map((stop, idx) => ({
+    id: stop.id,
+    name: stop.name,
+    latitude: stop.latitude,
+    longitude: stop.longitude,
+    estimatedTime: estimatedStopTimes[idx + 1] || '',
+    hasControllerAlert: isControllerNearStop(stop, lineId, activeControllers),
+  }));
 }
 
 /**
@@ -407,6 +429,12 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
             toStop: lineSeg.stops[lineSeg.stops.length - 1],
             stopsCount: stopCount,
             passedStops: lineSeg.stops,
+            intermediateStops: buildIntermediateStopsInfo(
+              lineSeg.stops,
+              stopTimes,
+              line.id,
+              reportService.getActiveControllerReports(now.getTime())
+            ),
             estimatedStopTimes: stopTimes,
             departureTime: formatTime(boardingTime),
             arrivalTime: formatTime(alightingTime),
@@ -580,6 +608,12 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
                 toStop: hubStopA,
                 stopsCount: stopsCountA,
                 passedStops: legA.stops,
+                intermediateStops: buildIntermediateStopsInfo(
+                  legA.stops,
+                  stopTimesA,
+                  lineA.id,
+                  reportService.getActiveControllerReports(now.getTime())
+                ),
                 estimatedStopTimes: stopTimesA,
                 departureTime: formatTime(boardingTimeA),
                 arrivalTime: formatTime(arrivalHubA),
@@ -611,6 +645,12 @@ export async function calculateRoutes(query: RouteQuery): Promise<RouteOption[]>
                 toStop: legB.stops[legB.stops.length - 1],
                 stopsCount: stopsCountB,
                 passedStops: legB.stops,
+                intermediateStops: buildIntermediateStopsInfo(
+                  legB.stops,
+                  stopTimesB,
+                  lineB.id,
+                  reportService.getActiveControllerReports(now.getTime())
+                ),
                 estimatedStopTimes: stopTimesB,
                 departureTime: formatTime(boardingTimeB),
                 arrivalTime: formatTime(alightingTimeB),
