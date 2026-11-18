@@ -10,6 +10,7 @@ import {
 } from '../../utils/controllerTrackingUtils';
 import { getCrowdBadgeTheme } from '../../utils/crowdUtils';
 import { computeCorridorOffsets } from '../../utils/polylineOffset';
+import { AKHAAA_REPORT_LABELS } from '../../utils/quickReportUtils';
 import { resolveSegmentIntermediateStops } from '../../utils/routeTimelineUtils';
 import { NavigationArrowMarker } from './NavigationArrowMarker';
 
@@ -612,15 +613,16 @@ export const TransitMap: React.FC<TransitMapProps> = React.memo(({
             </TouchableOpacity>
           )}
 
-          {/* Controller Report Button with Live Counter Badge */}
+          {/* AKHAAA Controller Report Button with Live Counter Badge */}
           <TouchableOpacity
             style={styles.fabReport}
             onPress={onOpenReportModal}
             activeOpacity={0.85}
-            accessibilityLabel="Signaler des contrôleurs rapidement"
+            accessibilityLabel={AKHAAA_REPORT_LABELS.fabAccessibilityLabel}
             accessibilityRole="button"
           >
             <Text style={styles.fabIcon}>🚨</Text>
+            <Text style={styles.fabLabel}>{AKHAAA_REPORT_LABELS.fabLabel}</Text>
             {activeControllerReports.length > 0 && (
               <View style={styles.fabCounter}>
                 <Text style={styles.fabCounterText}>
@@ -852,7 +854,7 @@ const styles = StyleSheet.create({
   floatingStack: {
     position: 'absolute',
     right: 14,
-    alignItems: 'center',
+    alignItems: 'flex-end',
     gap: 12,
     zIndex: 32,
   },
@@ -883,12 +885,14 @@ const styles = StyleSheet.create({
     color: '#1A73E8',
   },
   fabReport: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
+    flexDirection: 'row',
+    height: 50,
+    paddingHorizontal: 14,
+    borderRadius: 25,
     backgroundColor: COLORS.error,
     justifyContent: 'center',
     alignItems: 'center',
+    gap: 6,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.28,
@@ -896,7 +900,13 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   fabIcon: {
-    fontSize: 24,
+    fontSize: 19,
+  },
+  fabLabel: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0.6,
   },
   fabCounter: {
     position: 'absolute',

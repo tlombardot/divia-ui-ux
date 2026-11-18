@@ -13,6 +13,7 @@ import {
   formatCrowdSourceLabel,
   getCrowdBadgeTheme,
 } from '../../utils/crowdUtils';
+import { AKHAAA_REPORT_LABELS } from '../../utils/quickReportUtils';
 
 interface StationDetailContentProps {
   stop: TransitStop;
@@ -144,10 +145,12 @@ export const StationDetailContent: React.FC<StationDetailContentProps> = ({
               style={styles.reportStationBtn}
               onPress={() => onReportAtStation(stop)}
               activeOpacity={0.85}
+              accessibilityLabel={`${AKHAAA_REPORT_LABELS.fabAccessibilityLabel} à ${stop.name}`}
+              accessibilityRole="button"
             >
               <Text style={styles.reportStationIcon}>🚨</Text>
               <Text style={styles.reportStationText} numberOfLines={1}>
-                Signaler à {stop.name.split(' ')[0]}
+                {AKHAAA_REPORT_LABELS.stationButtonPrefix} · {stop.name.split(' ')[0]}
               </Text>
             </TouchableOpacity>
           )}

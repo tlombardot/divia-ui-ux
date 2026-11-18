@@ -18,6 +18,7 @@ import { COLORS } from '../../theme/colors';
 import { TransitStop, UserLocation } from '../../types';
 import { filterStationsByQuery } from '../../utils/controllerTrackingUtils';
 import {
+  AKHAAA_REPORT_LABELS,
   buildQuickControllerPayload,
   getNearestStops,
   resolveDefaultLineId,
@@ -162,7 +163,7 @@ export const QuickControllerModal: React.FC<QuickControllerModalProps> = ({
               <View style={styles.checkCircle}>
                 <Text style={styles.checkIcon}>✓</Text>
               </View>
-              <Text style={styles.successTitle}>Contrôleurs signalés !</Text>
+              <Text style={styles.successTitle}>{AKHAAA_REPORT_LABELS.successTitle}</Text>
               <Text style={styles.successSub}>
                 La communauté Dijonnaise est prévenue à l'arrêt {selectedStop.name}.
               </Text>
@@ -176,9 +177,11 @@ export const QuickControllerModal: React.FC<QuickControllerModalProps> = ({
               <View style={styles.header}>
                 <View style={styles.headerLeft}>
                   <View style={styles.badgeKicker}>
-                    <Text style={styles.badgeKickerText}>DIVIA EN DIRECT · 1-TAP</Text>
+                    <Text style={styles.badgeKickerText}>
+                      {AKHAAA_REPORT_LABELS.modalKicker}
+                    </Text>
                   </View>
-                  <Text style={styles.title}>🚨 Signaler des contrôleurs</Text>
+                  <Text style={styles.title}>{AKHAAA_REPORT_LABELS.modalTitle}</Text>
                 </View>
                 <TouchableOpacity
                   onPress={onClose}
@@ -344,10 +347,10 @@ export const QuickControllerModal: React.FC<QuickControllerModalProps> = ({
                 <Text style={styles.primaryButtonIcon}>🚨</Text>
                 <View style={styles.primaryButtonTexts}>
                   <Text style={styles.primaryButtonTitle}>
-                    Signaler des contrôleurs ici
+                    {AKHAAA_REPORT_LABELS.ctaTitle}
                   </Text>
                   <Text style={styles.primaryButtonSub}>
-                    1-Tap immédiat · Diffusion réseau (40 min)
+                    {AKHAAA_REPORT_LABELS.ctaSubtitle}
                   </Text>
                 </View>
               </TouchableOpacity>
