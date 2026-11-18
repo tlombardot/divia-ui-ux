@@ -1,13 +1,21 @@
-import { useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useCallback, useState } from 'react';
+import { Dimensions, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getLineColor } from '../../data/dijonNetwork';
 import { NavState } from '../../hooks/useLiveNavigation';
 import { COLORS } from '../../theme/colors';
 import { Report, RouteOption } from '../../types';
+import { RouteTimelineContent } from '../sheet/RouteTimelineContent';
+
+const DETAILS_DRAWER_HEIGHT = Math.min(
+  Math.round(Dimensions.get('window').height * 0.5),
+  420
+);
 
 interface ActiveTripBottomSheetProps {
   route: RouteOption;
+  originLabel?: string;
+  destinationLabel?: string;
   navState: NavState;
   currentSegmentIndex: number;
   distanceToNextStep: number;
@@ -15,6 +23,9 @@ interface ActiveTripBottomSheetProps {
   alightingWarning: string | null;
   liveControllerAlert?: Report | null;
   onDismissControllerAlert?: (id: string) => void;
+  expandedSegments?: Record<number, boolean>;
+  onToggleSegmentAccordion?: (idx: number) => void;
+  onDetailsOpenChange?: (isOpen: boolean) => void;
   isSimulating: boolean;
   simulationProgress: number;
   onStartSimulation: () => void;
@@ -32,6 +43,8 @@ function getManeuverArrow(instruction: string): string {
 
 export const ActiveTripBottomSheet: React.FC<ActiveTripBottomSheetProps> = ({
   route,
+  originLabel = 'Ma position',
+  destinationLabel = 'Destination',
   navState,
   currentSegmentIndex,
   distanceToNextStep,
@@ -39,6 +52,9 @@ export const ActiveTripBottomSheet: React.FC<ActiveTripBottomSheetProps> = ({
   alightingWarning,
   liveControllerAlert,
   onDismissControllerAlert,
+  expandedSegments,
+  onToggleSegmentAccordion,
+  onDetailsOpenChange,
   isSimulating,
   simulationProgress,
   onStartSimulation,
@@ -47,6 +63,20 @@ export const ActiveTripBottomSheet: React.FC<ActiveTripBottomSheetProps> = ({
 }) => {
   const insets = useSafeAreaInsets();
   const [showSimMenu, setShowSimMenu] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
+
+  const toggleDetails = useCallback(
+    (next?: boolean) => {
+      setShowDetails(prev => {
+        const resolved = typeof next === 'boolean' ? next : !prev;
+        if (onDetailsOpenChange) {
+          onDetailsOpenChange(resolved);
+        }
+        return resolved;
+      });
+    },
+    [onDetailsOpenChange]
+  );
 
   const currentSegment = route.segments[currentSegmentIndex] || route.segments[0];
   const passedStops = currentSegment?.passedStops || [];
@@ -202,7 +232,7 @@ export const ActiveTripBottomSheet: React.FC<ActiveTripBottomSheetProps> = ({
       <View pointerEvents="none" style={styles.mapPassthrough} />
 
       {/* ===================================================================== */}
-      {/* COMPACT BOTTOM CARD (ETA + Progress + Discreet Simulator + Quitter)   */}
+      {/* COMPACT BOTTOM CARD + EXPANDABLE TRIP DETAILS DRAWER                  */}
       {/* ===================================================================== */}
       <View
         style={[
@@ -210,6 +240,19 @@ export const ActiveTripBottomSheet: React.FC<ActiveTripBottomSheetProps> = ({
           { paddingBottom: Math.max(insets.bottom + 4, 14) },
         ]}
       >
+        {/* Interactive Grab Handle to expand/collapse full trip timeline */}
+        <TouchableOpacity
+          style={styles.grabArea}
+          onPress={() => toggleDetails()}
+          activeOpacity={0.7}
+          accessibilityLabel={
+            showDetails ? 'Masquer le détail du trajet' : 'Voir le détail du trajet'
+          }
+          accessibilityRole="button"
+        >
+          <View style={styles.grabHandle} />
+        </TouchableOpacity>
+
         {/* Route Progress Bar */}
         <View style={styles.progressTrack}>
           <View
@@ -223,9 +266,13 @@ export const ActiveTripBottomSheet: React.FC<ActiveTripBottomSheetProps> = ({
           />
         </View>
 
-        {/* Main Compact Row: Remaining Time / Arrival / Quit */}
+        {/* Main Compact Row: Remaining Time / Détails / Simulator / Quit */}
         <View style={styles.compactRow}>
-          <View style={styles.etaColumn}>
+          <TouchableOpacity
+            style={styles.etaColumn}
+            onPress={() => toggleDetails()}
+            activeOpacity={0.75}
+          >
             <View style={styles.etaTopLine}>
               <Text style={styles.etaMinutes}>
                 {navState === 'ARRIVED' ? 'Arrivé' : `${totalRemainingMin} min`}
@@ -235,21 +282,44 @@ export const ActiveTripBottomSheet: React.FC<ActiveTripBottomSheetProps> = ({
             <Text style={styles.etaSub} numberOfLines={1}>
               {route.summary}
             </Text>
-          </View>
+          </TouchableOpacity>
 
           <View style={styles.actionsGroup}>
+            {/* Trip Details Toggle Button */}
+            <TouchableOpacity
+              style={[styles.detailsToggleBtn, showDetails && styles.detailsToggleBtnActive]}
+              onPress={() => toggleDetails()}
+              activeOpacity={0.75}
+              accessibilityLabel={
+                showDetails ? 'Fermer les détails du trajet' : 'Afficher les détails du trajet'
+              }
+              accessibilityRole="button"
+            >
+              <Text
+                style={[
+                  styles.detailsToggleText,
+                  showDetails && styles.detailsToggleTextActive,
+                ]}
+              >
+                {showDetails ? '▾ Carte' : '☰ Détails'}
+              </Text>
+            </TouchableOpacity>
+
             {/* Discreet Demo GPS Simulator Toggle */}
             <TouchableOpacity
               style={[styles.simTogglePill, isSimulating && styles.simToggleActive]}
               onPress={() => setShowSimMenu(prev => !prev)}
               activeOpacity={0.75}
             >
-              <Text style={styles.simToggleText}>{isSimulating ? '📡 Démo' : '⚙'}</Text>
+              <Text style={styles.simToggleText}>{isSimulating ? '📡' : '⚙'}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.quitButton}
-              onPress={onEndTrip}
+              onPress={() => {
+                toggleDetails(false);
+                onEndTrip();
+              }}
               activeOpacity={0.8}
             >
               <Text style={styles.quitButtonText}>
@@ -259,8 +329,37 @@ export const ActiveTripBottomSheet: React.FC<ActiveTripBottomSheetProps> = ({
           </View>
         </View>
 
+        {/* Expandable Full Step-by-Step Trip Details Drawer */}
+        {showDetails && (
+          <View style={styles.detailsDrawer}>
+            <View style={styles.detailsDrawerHeader}>
+              <Text style={styles.detailsDrawerTitle}>
+                Détail du trajet · {route.segments.length} étape
+                {route.segments.length > 1 ? 's' : ''}
+              </Text>
+              <TouchableOpacity
+                onPress={() => toggleDetails(false)}
+                style={styles.detailsCloseBtn}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.detailsCloseText}>Fermer ✕</Text>
+              </TouchableOpacity>
+            </View>
+            <RouteTimelineContent
+              route={route}
+              originLabel={originLabel}
+              destinationLabel={destinationLabel}
+              hideHeader
+              activeSegmentIndex={currentSegmentIndex}
+              expandedSegments={expandedSegments}
+              onToggleSegmentAccordion={onToggleSegmentAccordion}
+              onBackToList={() => toggleDetails(false)}
+            />
+          </View>
+        )}
+
         {/* Discreet Expandable GPS Simulator Drawer (for Jury / Home testing) */}
-        {(showSimMenu || isSimulating) && navState !== 'ARRIVED' && (
+        {(showSimMenu || isSimulating) && navState !== 'ARRIVED' && !showDetails && (
           <View style={styles.simBar}>
             <Text style={styles.simBarLabel}>
               Simulateur GPS ({Math.round(simulationProgress * 100)}%)
@@ -563,5 +662,69 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '800',
+  },
+  grabArea: {
+    alignItems: 'center',
+    paddingTop: 2,
+    paddingBottom: 10,
+  },
+  grabHandle: {
+    width: 42,
+    height: 4.5,
+    borderRadius: 3,
+    backgroundColor: '#D0D3D6',
+  },
+  detailsToggleBtn: {
+    height: 40,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    backgroundColor: '#F3E5F5',
+    borderWidth: 1,
+    borderColor: '#E1BEE7',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  detailsToggleBtnActive: {
+    backgroundColor: COLORS.cassis,
+    borderColor: COLORS.cassis,
+  },
+  detailsToggleText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: COLORS.cassis,
+  },
+  detailsToggleTextActive: {
+    color: '#FFFFFF',
+  },
+  detailsDrawer: {
+    height: DETAILS_DRAWER_HEIGHT,
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#E8EAED',
+  },
+  detailsDrawerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  detailsDrawerTitle: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#202124',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  detailsCloseBtn: {
+    backgroundColor: '#F1F3F4',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+  },
+  detailsCloseText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#5F6368',
   },
 });

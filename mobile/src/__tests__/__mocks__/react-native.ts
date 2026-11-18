@@ -5,6 +5,9 @@ export const Modal = 'Modal';
 export const TextInput = 'TextInput';
 export const ScrollView = 'ScrollView';
 export const KeyboardAvoidingView = 'KeyboardAvoidingView';
+export const Dimensions = {
+  get: () => ({ width: 390, height: 844, scale: 3, fontScale: 1 }),
+};
 export const Platform = {
   OS: 'ios',
   select: (objs: Record<string, unknown>) => objs.ios ?? objs.default,

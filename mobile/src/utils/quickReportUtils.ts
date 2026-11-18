@@ -8,6 +8,17 @@ export interface NearestStopResult {
   formattedDistance: string;
 }
 
+export const AKHAAA_REPORT_LABELS = {
+  fabLabel: 'AKHAAA',
+  fabAccessibilityLabel: 'AKHAAA (signaler un contrôleur)',
+  modalKicker: 'DIVIA EN DIRECT · SIGNALER UN CONTRÔLEUR',
+  modalTitle: '🚨 AKHAAA (Signaler un contrôleur)',
+  ctaTitle: 'AKHAAA (Signaler un contrôleur)',
+  ctaSubtitle: '1-Tap immédiat · Diffusion réseau (40 min)',
+  successTitle: 'AKHAAA envoyé !',
+  stationButtonPrefix: 'AKHAAA',
+} as const;
+
 /**
  * Format a distance in meters into human-readable text ("45 m" or "1.2 km")
  */

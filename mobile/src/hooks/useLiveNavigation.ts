@@ -9,6 +9,7 @@ import {
 } from '../data/dijonNetwork';
 import { storageService } from '../services/storageService';
 import { RouteOption, RouteSegment, UserLocation } from '../types';
+import { shouldAcceptHeadingUpdate } from '../utils/headingUtils';
 import { generateSmoothTrajectory } from '../utils/trajectoryUtils';
 
 export type NavState =
@@ -46,6 +47,8 @@ export function useLiveNavigation() {
   const locationSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
   const headingSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
   const simulationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastHeadingRef = useRef<number | null>(null);
+  const lastHeadingUpdateRef = useRef<number>(0);
 
   // ---------------------------------------------------------------------------
   // Traitement d'une mise à jour GPS et Machine à États Geofencing Automatique
@@ -276,16 +279,23 @@ export function useLiveNavigation() {
     [activeRoute, navState, currentSegmentIndex, passedStopsCount]
   );
 
+  const processLocationUpdateRef = useRef(processLocationUpdate);
+  processLocationUpdateRef.current = processLocationUpdate;
+
+  const isTrackingActive = navState !== 'IDLE' && navState !== 'ARRIVED' && !isSimulating;
+
   // ---------------------------------------------------------------------------
-  // Suivi GPS réel continu en arrière-plan via expo-location
+  // Suivi GPS réel continu uniquement pendant une navigation active (zéro coût en mode accueil)
   // ---------------------------------------------------------------------------
   useEffect(() => {
+    if (!isTrackingActive) return;
+
     let isMounted = true;
 
     async function startContinuousTracking() {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') return;
+        if (status !== 'granted' || !isMounted) return;
 
         const sub = await Location.watchPositionAsync(
           {
@@ -294,7 +304,7 @@ export function useLiveNavigation() {
             distanceInterval: 4, // 4m
           },
           position => {
-            if (!isMounted || isSimulating) return;
+            if (!isMounted) return;
 
             const dist = calculateDistanceMeters(
               position.coords.latitude,
@@ -303,7 +313,7 @@ export function useLiveNavigation() {
               DIJON_CENTER.longitude
             );
 
-            // Bascule sur Darcy si testeur à > 15 km
+            // Bascule sur Darcy si testeur à > 25 km
             if (dist > DIJON_MAX_DISTANCE_METERS) {
               setCurrentLocation(prev => ({
                 ...prev,
@@ -328,7 +338,7 @@ export function useLiveNavigation() {
                 }
               }
 
-              processLocationUpdate({
+              processLocationUpdateRef.current({
                 latitude: posLat,
                 longitude: posLon,
                 heading,
@@ -352,21 +362,23 @@ export function useLiveNavigation() {
         locationSubscriptionRef.current = null;
       }
     };
-  }, [processLocationUpdate, isSimulating]);
+  }, [isTrackingActive]);
 
   // ---------------------------------------------------------------------------
-  // Suivi en temps réel de la boussole physique du smartphone (orientation de la flèche)
+  // Suivi boussole physique uniquement en navigation active (throttlé + dead-band anti-jitter)
   // ---------------------------------------------------------------------------
   useEffect(() => {
+    if (!isTrackingActive) return;
+
     let isMounted = true;
 
     async function startCompassTracking() {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') return;
+        if (status !== 'granted' || !isMounted) return;
 
         const sub = await Location.watchHeadingAsync(headingObj => {
-          if (!isMounted || isSimulating) return;
+          if (!isMounted) return;
           const h =
             headingObj.trueHeading >= 0
               ? headingObj.trueHeading
@@ -374,6 +386,19 @@ export function useLiveNavigation() {
 
           if (h >= 0) {
             const rounded = Math.round(h);
+            const now = Date.now();
+            if (
+              !shouldAcceptHeadingUpdate(
+                lastHeadingRef.current,
+                rounded,
+                lastHeadingUpdateRef.current,
+                now
+              )
+            ) {
+              return;
+            }
+            lastHeadingRef.current = rounded;
+            lastHeadingUpdateRef.current = now;
             setCurrentLocation(prev => {
               if (prev.heading === rounded) return prev;
               return {
@@ -399,7 +424,7 @@ export function useLiveNavigation() {
         headingSubscriptionRef.current = null;
       }
     };
-  }, [isSimulating]);
+  }, [isTrackingActive]);
 
   // ---------------------------------------------------------------------------
   // Restauration de session depuis AsyncStorage

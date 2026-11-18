@@ -3,7 +3,10 @@ import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-nati
 import { getLineColor } from '../../data/dijonNetwork';
 import { RouteOption } from '../../types';
 import { getCrowdBadgeTheme } from '../../utils/crowdUtils';
-import { getTransitIntermediateDisplayModel } from '../../utils/routeTimelineUtils';
+import {
+  getTransitIntermediateDisplayModel,
+  getTripStepStatus,
+} from '../../utils/routeTimelineUtils';
 
 interface RouteTimelineContentProps {
   route: RouteOption;
@@ -12,6 +15,8 @@ interface RouteTimelineContentProps {
   onBackToList: () => void;
   expandedSegments?: Record<number, boolean>;
   onToggleSegmentAccordion?: (idx: number) => void;
+  hideHeader?: boolean;
+  activeSegmentIndex?: number;
 }
 
 export const RouteTimelineContent: React.FC<RouteTimelineContentProps> = ({
@@ -21,6 +26,8 @@ export const RouteTimelineContent: React.FC<RouteTimelineContentProps> = ({
   onBackToList,
   expandedSegments: controlledExpandedSegments,
   onToggleSegmentAccordion,
+  hideHeader = false,
+  activeSegmentIndex,
 }) => {
   const [localExpandedSegments, setLocalExpandedSegments] = useState<Record<number, boolean>>({});
   const expandedSegments = controlledExpandedSegments ?? localExpandedSegments;
@@ -35,26 +42,28 @@ export const RouteTimelineContent: React.FC<RouteTimelineContentProps> = ({
 
   return (
     <View style={styles.container}>
-      {/* Top Timeline Header */}
-      <View style={styles.headerRow}>
-        <TouchableOpacity
-          style={styles.backBtn}
-          onPress={onBackToList}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.backIcon}>←</Text>
-        </TouchableOpacity>
-        <View style={styles.headerTexts}>
-          <Text style={styles.headerDuration}>
-            {route.totalDurationMinutes} min{' '}
-            <Text style={styles.headerArrival}>· Arrivée {route.arrivalTime}</Text>
-          </Text>
-          <Text style={styles.headerSub} numberOfLines={1}>
-            {route.summary}
-            {route.headwayMinutes ? ` · Toutes les ${route.headwayMinutes} min` : ''}
-          </Text>
+      {/* Top Timeline Header (hidden when embedded inside active navigation sheet) */}
+      {!hideHeader && (
+        <View style={styles.headerRow}>
+          <TouchableOpacity
+            style={styles.backBtn}
+            onPress={onBackToList}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.backIcon}>←</Text>
+          </TouchableOpacity>
+          <View style={styles.headerTexts}>
+            <Text style={styles.headerDuration}>
+              {route.totalDurationMinutes} min{' '}
+              <Text style={styles.headerArrival}>· Arrivée {route.arrivalTime}</Text>
+            </Text>
+            <Text style={styles.headerSub} numberOfLines={1}>
+              {route.summary}
+              {route.headwayMinutes ? ` · Toutes les ${route.headwayMinutes} min` : ''}
+            </Text>
+          </View>
         </View>
-      </View>
+      )}
 
       {/* Scrollable Vertical Timeline */}
       <ScrollView
@@ -95,6 +104,13 @@ export const RouteTimelineContent: React.FC<RouteTimelineContentProps> = ({
         {/* Segments Loop */}
         {route.segments.map((seg, idx) => {
           const isExpanded = Boolean(expandedSegments[idx]);
+          const stepStatus = getTripStepStatus(idx, activeSegmentIndex);
+          const segmentStateStyle =
+            stepStatus === 'current'
+              ? styles.segmentCurrent
+              : stepStatus === 'completed'
+                ? styles.segmentCompleted
+                : undefined;
 
           // ===================================================================
           // WALK Segment (Dashed rail + Expandable street-by-street instructions)
@@ -107,7 +123,12 @@ export const RouteTimelineContent: React.FC<RouteTimelineContentProps> = ({
             const hasMultipleSteps = detailedSteps.length > 1;
 
             return (
-              <View key={`seg-walk-${idx}`} style={styles.segmentBlock}>
+              <View key={`seg-walk-${idx}`} style={[styles.segmentBlock, segmentStateStyle]}>
+                {stepStatus === 'current' && (
+                  <View style={styles.liveStepBadge}>
+                    <Text style={styles.liveStepBadgeText}>● ÉTAPE EN COURS</Text>
+                  </View>
+                )}
                 <View style={styles.nodeRow}>
                   <View style={styles.timeCol}>
                     <Text style={styles.timeMuted}>{seg.durationMinutes} min</Text>
@@ -168,7 +189,12 @@ export const RouteTimelineContent: React.FC<RouteTimelineContentProps> = ({
           // ===================================================================
           if (seg.type === 'TRANSFER') {
             return (
-              <View key={`seg-transfer-${idx}`} style={styles.segmentBlock}>
+              <View key={`seg-transfer-${idx}`} style={[styles.segmentBlock, segmentStateStyle]}>
+                {stepStatus === 'current' && (
+                  <View style={styles.liveStepBadge}>
+                    <Text style={styles.liveStepBadgeText}>● ÉTAPE EN COURS</Text>
+                  </View>
+                )}
                 <View style={styles.nodeRow}>
                   <View style={styles.timeCol}>
                     <Text style={styles.timeMuted}>{seg.durationMinutes} min</Text>
@@ -198,7 +224,12 @@ export const RouteTimelineContent: React.FC<RouteTimelineContentProps> = ({
           const intermediateDisplay = getTransitIntermediateDisplayModel(seg, route.alerts);
 
           return (
-            <View key={`seg-transit-${idx}`} style={styles.segmentBlock}>
+            <View key={`seg-transit-${idx}`} style={[styles.segmentBlock, segmentStateStyle]}>
+              {stepStatus === 'current' && (
+                <View style={styles.liveStepBadge}>
+                  <Text style={styles.liveStepBadgeText}>● ÉTAPE EN COURS</Text>
+                </View>
+              )}
               {/* Boarding Stop (Filled Circle) */}
               <View style={styles.nodeRow}>
                 <View style={styles.timeCol}>
@@ -698,5 +729,32 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
     color: '#B42318',
+  },
+  segmentCurrent: {
+    backgroundColor: '#FFF5F9',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#F3C6D8',
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 6,
+    marginBottom: 8,
+  },
+  segmentCompleted: {
+    opacity: 0.55,
+  },
+  liveStepBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#821245',
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    marginBottom: 6,
+  },
+  liveStepBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.5,
   },
 });

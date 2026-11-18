@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ALL_DIJON_STOPS } from '../data/dijonNetwork';
 import { TransitStop } from '../types';
 import {
+  AKHAAA_REPORT_LABELS,
   buildQuickControllerPayload,
   formatStopDistance,
   getNearestStops,
@@ -126,6 +127,16 @@ describe('quickReportUtils', () => {
       expect(payload.lineName).toBe('Toutes lignes');
       expect(payload.directionTerminus).toBe('STATIONARY');
       expect(payload.description).toBe('2 contrôleurs en civil');
+    });
+  });
+
+  describe('AKHAAA_REPORT_LABELS', () => {
+    it('exposes branded AKHAAA labels explaining controller reporting', () => {
+      expect(AKHAAA_REPORT_LABELS.fabLabel).toBe('AKHAAA');
+      expect(AKHAAA_REPORT_LABELS.modalTitle).toContain('AKHAAA');
+      expect(AKHAAA_REPORT_LABELS.ctaTitle).toContain('AKHAAA');
+      expect(AKHAAA_REPORT_LABELS.ctaTitle.toLowerCase()).toContain('contrôleur');
+      expect(AKHAAA_REPORT_LABELS.successTitle).toContain('AKHAAA');
     });
   });
 });
