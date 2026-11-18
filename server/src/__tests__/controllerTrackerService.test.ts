@@ -6,6 +6,7 @@ import {
   BUS_INTERSTATION_MS,
   computeControllerProgression,
   controllerBroadcastSchema,
+  matchRouteControllerReports,
   STATIONARY_TTL_MS,
   TERMINUS_BUFFER_MS,
   TRAM_INTERSTATION_MS,
@@ -294,5 +295,115 @@ describe('ControllerTrackerService — Predictive Stop-by-Stop Progression & Ter
     for (const pt of l6MovProg.alertPolyline) {
       expect(projectPointOntoPolyline(pt, l6Line.polyline).distanceMeters).toBeLessThan(1);
     }
+  });
+
+  it('(f) prevents false-positive controller alerts on unaffected routes (other section, other line, opposite direction, walk-only)', () => {
+    const t0 = 1_700_000_000_000;
+
+    // Seed-like T2 controller at Monge heading South to Chenôve Centre
+    const mongeT2Report = makeMovingReport({
+      id: 'ctrl-monge-t2',
+      stopId: 'hub-monge',
+      stopName: 'Monge Cité de la Gastronomie',
+      lineId: 'T2',
+      lineName: 'T2 · Valmy ↔ Chenôve Centre',
+      latitude: 47.3178,
+      longitude: 5.0345,
+      direction: 'Dir. Chenôve Centre',
+      directionTerminus: 'Chenôve Centre',
+      reportedAt: t0,
+    });
+    mongeT2Report.progression = computeControllerProgression(mongeT2Report, t0, DIJON_LINES) || undefined;
+
+    // Seed-like T1 controller at Darcy heading East to Quetigny Centre
+    const darcyT1Report = makeMovingReport({
+      id: 'ctrl-darcy-t1',
+      stopId: 'hub-darcy',
+      stopName: 'Darcy',
+      lineId: 'T1',
+      direction: 'Dir. Quetigny Centre',
+      directionTerminus: 'Quetigny Centre',
+      reportedAt: t0,
+    });
+    darcyT1Report.progression = computeControllerProgression(darcyT1Report, t0, DIJON_LINES) || undefined;
+
+    // Stationary ALL-lines controller at Darcy
+    const darcyAllReport = makeMovingReport({
+      id: 'ctrl-darcy-all',
+      stopId: 'hub-darcy',
+      stopName: 'Darcy',
+      lineId: 'ALL',
+      lineName: 'Toutes lignes',
+      direction: 'À quai (fixe) · Darcy',
+      directionTerminus: 'STATIONARY',
+      reportedAt: t0,
+    });
+    darcyAllReport.progression = computeControllerProgression(darcyAllReport, t0, DIJON_LINES) || undefined;
+
+    // 1. T2 North Dijon route (République -> Toison d'Or) must NOT match T2 South controller at Monge
+    const northT2Match = matchRouteControllerReports({
+      linesUsed: ['T2'],
+      stopIdsUsed: ['hub-republique', 't2-drapeau', 't2-toison'],
+      activeControllers: [mongeT2Report],
+      currentTime: t0,
+      lines: DIJON_LINES,
+    });
+    expect(northT2Match.matchingAlerts).toHaveLength(0);
+    expect(northT2Match.predictiveAlerts).toHaveLength(0);
+
+    // 2. L5 bus passing Darcy must NOT match T1-specific tram controller at Darcy
+    const l5BusMatch = matchRouteControllerReports({
+      linesUsed: ['L5'],
+      stopIdsUsed: ['hub-darcy', 'hub-universite'],
+      activeControllers: [darcyT1Report],
+      currentTime: t0,
+      lines: DIJON_LINES,
+    });
+    expect(l5BusMatch.matchingAlerts).toHaveLength(0);
+    expect(l5BusMatch.predictiveAlerts).toHaveLength(0);
+
+    // 3. L5 bus passing Darcy MUST match an ALL-lines stationary controller at Darcy
+    const l5BusAllMatch = matchRouteControllerReports({
+      linesUsed: ['L5'],
+      stopIdsUsed: ['hub-darcy', 'hub-universite'],
+      activeControllers: [darcyAllReport],
+      currentTime: t0,
+      lines: DIJON_LINES,
+    });
+    expect(l5BusAllMatch.matchingAlerts).toHaveLength(1);
+    expect(l5BusAllMatch.matchingAlerts[0].id).toBe('ctrl-darcy-all');
+
+    // 4. T1 opposite direction (Quetigny Centre -> Université heading West) must NOT match Darcy -> Quetigny East tram
+    const oppositeT1Match = matchRouteControllerReports({
+      linesUsed: ['T1'],
+      stopIdsUsed: ['t1-quetigny', 'hub-universite'],
+      activeControllers: [darcyT1Report],
+      currentTime: t0,
+      lines: DIJON_LINES,
+    });
+    expect(oppositeT1Match.matchingAlerts).toHaveLength(0);
+    expect(oppositeT1Match.predictiveAlerts).toHaveLength(0);
+
+    // 5. Walk-only route (linesUsed = []) must NEVER match any controller
+    const walkOnlyMatch = matchRouteControllerReports({
+      linesUsed: [],
+      stopIdsUsed: ['hub-darcy'],
+      activeControllers: [darcyT1Report, darcyAllReport],
+      currentTime: t0,
+      lines: DIJON_LINES,
+    });
+    expect(walkOnlyMatch.matchingAlerts).toHaveLength(0);
+    expect(walkOnlyMatch.predictiveAlerts).toHaveLength(0);
+
+    // 6. T1 Darcy -> Université (same direction East) MUST match Darcy -> Quetigny T1 controller
+    const affectedT1Match = matchRouteControllerReports({
+      linesUsed: ['T1'],
+      stopIdsUsed: ['hub-darcy', 'hub-godrans', 'hub-republique', 'hub-universite'],
+      activeControllers: [darcyT1Report],
+      currentTime: t0,
+      lines: DIJON_LINES,
+    });
+    expect(affectedT1Match.matchingAlerts).toHaveLength(1);
+    expect(affectedT1Match.matchingAlerts[0].id).toBe('ctrl-darcy-t1');
   });
 });

@@ -394,4 +394,58 @@ describe('GoogleTransitService — Polyline decoding, TransitDetails mapping & W
     expect(banDetails?.label).toBe('Place de la Libération, Dijon');
     expect(banDetails?.latitude).toBeCloseTo(47.3215, 4);
   });
+
+  it('does NOT flag hasControllerAlert on a T2 North Dijon route when the only T2 controller is South at Monge', () => {
+    const now = new Date();
+    const t2NorthEncoded = encodeGooglePolyline([
+      [47.3262, 5.0461], // République
+      [47.3382, 5.0485], // Drapeau
+      [47.3545, 5.0512], // Toison d'Or
+    ]);
+
+    const northT2Route: GoogleRoute = {
+      duration: '600s',
+      distanceMeters: 3500,
+      legs: [
+        {
+          duration: '600s',
+          distanceMeters: 3500,
+          steps: [
+            {
+              travelMode: 'TRANSIT',
+              staticDuration: '600s',
+              distanceMeters: 3500,
+              polyline: { encodedPolyline: t2NorthEncoded },
+              transitDetails: {
+                headsign: 'Dijon Valmy',
+                stopCount: 5,
+                stopDetails: {
+                  departureStop: {
+                    name: 'République',
+                    location: { latLng: { latitude: 47.3262, longitude: 5.0461 } },
+                  },
+                  arrivalStop: {
+                    name: "Toison d'Or",
+                    location: { latLng: { latitude: 47.3545, longitude: 5.0512 } },
+                  },
+                },
+                transitLine: {
+                  name: 'Tram T2',
+                  nameShort: 'T2',
+                  color: '#4B2982',
+                  vehicle: { type: 'TRAM' },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const option = mapGoogleRouteToRouteOption(northT2Route, 0, now);
+    expect(option).not.toBeNull();
+    expect(option?.hasControllerAlert).toBe(false);
+    expect(option?.alerts).toHaveLength(0);
+    expect(option?.predictiveAlerts).toHaveLength(0);
+  });
 });

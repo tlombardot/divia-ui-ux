@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DIJON_LINES } from '../data/dijonNetwork';
+import { calculateDistanceMeters, DIJON_LINES } from '../data/dijonNetwork';
 import {
   ControllerProgression,
   PredictiveAlert,
@@ -456,7 +456,28 @@ export function buildStationPredictiveAlerts(
 }
 
 /**
- * Compute predictive controller alerts for a planned transit route (matching its lines & stops).
+ * Check whether the ordered stops of a route travel in the opposite direction
+ * of a MOVING controller along its line.
+ */
+function isOppositeDirectionOnLine(
+  stopIdsUsed: string[],
+  line: TransitLine | undefined,
+  directionTerminus: string
+): boolean {
+  if (!line || directionTerminus === 'STATIONARY') return false;
+  const orderedStops = getOrderedStopsForDirection(line, directionTerminus);
+  if (!orderedStops) return false;
+
+  const matchedIndices = stopIdsUsed
+    .map(id => orderedStops.findIndex(s => s.id === id))
+    .filter(idx => idx !== -1);
+
+  if (matchedIndices.length < 2) return false;
+  return matchedIndices[matchedIndices.length - 1] < matchedIndices[0];
+}
+
+/**
+ * Compute predictive controller alerts for a planned transit route (matching its lines, stops & direction).
  */
 export function buildRoutePredictiveAlerts(
   linesUsed: string[],
@@ -465,20 +486,44 @@ export function buildRoutePredictiveAlerts(
   currentTime: number = Date.now(),
   lines: TransitLine[] = networkGeometryService.getCachedLinesSync()
 ): PredictiveAlert[] {
+  if (linesUsed.length === 0 || stopIdsUsed.length === 0) {
+    return [];
+  }
+
   const upperLines = new Set(linesUsed.map(l => l.toUpperCase()));
   const seenReportIds = new Set<string>();
   const alerts: PredictiveAlert[] = [];
 
+  // Filter out moving controllers traveling in the opposite direction of this route
+  const compatibleControllers = activeControllers.filter(report => {
+    if (report.type !== 'CONTROLLER') return false;
+    const repLine = (report.lineId || 'ALL').toUpperCase();
+    if (repLine !== 'ALL' && !upperLines.has(repLine)) return false;
+
+    const prog =
+      report.progression || computeControllerProgression(report, currentTime, lines);
+    if (!prog || prog.isExpired) return false;
+
+    if (prog.mode === 'MOVING') {
+      const line = lines.find(l => l.id.toUpperCase() === repLine);
+      if (isOppositeDirectionOnLine(stopIdsUsed, line, prog.directionTerminus)) {
+        return false;
+      }
+    }
+    return true;
+  });
+
   for (const stopId of stopIdsUsed) {
     const stationAlerts = buildStationPredictiveAlerts(
       stopId,
-      activeControllers,
+      compatibleControllers,
       currentTime,
       lines
     );
     for (const alert of stationAlerts) {
+      const alertLine = (alert.lineId || 'ALL').toUpperCase();
       if (
-        (upperLines.size === 0 || upperLines.has(alert.lineId.toUpperCase())) &&
+        (alertLine === 'ALL' || upperLines.has(alertLine)) &&
         !seenReportIds.has(alert.reportId)
       ) {
         seenReportIds.add(alert.reportId);
@@ -488,4 +533,105 @@ export function buildRoutePredictiveAlerts(
   }
 
   return alerts.sort((a, b) => a.etaMinutes - b.etaMinutes);
+}
+
+export interface RouteSegmentTrack {
+  lineId: string;
+  polyline: [number, number][];
+}
+
+export interface MatchRouteControllersInput {
+  linesUsed: string[];
+  stopIdsUsed: string[];
+  activeControllers: Report[];
+  currentTime?: number;
+  lines?: TransitLine[];
+  transitSegments?: RouteSegmentTrack[];
+}
+
+export interface MatchRouteControllersResult {
+  matchingAlerts: Report[];
+  predictiveAlerts: PredictiveAlert[];
+}
+
+/**
+ * Strictly match active CONTROLLER reports to a specific transit route:
+ * - Never matches walk-only routes (linesUsed empty)
+ * - Requires line compatibility (exact line match OR report lineId === 'ALL')
+ * - Requires spatial/trajectory relevance (current stop or approaching stop on this route,
+ *   same direction for moving reports, or within 120m of a same-line transit segment)
+ */
+export function matchRouteControllerReports({
+  linesUsed,
+  stopIdsUsed,
+  activeControllers,
+  currentTime = Date.now(),
+  lines = networkGeometryService.getCachedLinesSync(),
+  transitSegments = [],
+}: MatchRouteControllersInput): MatchRouteControllersResult {
+  if (linesUsed.length === 0 || activeControllers.length === 0) {
+    return { matchingAlerts: [], predictiveAlerts: [] };
+  }
+
+  const upperLines = new Set(linesUsed.map(l => l.toUpperCase()));
+  const stopIdSet = new Set(stopIdsUsed);
+
+  const predictiveAlerts = buildRoutePredictiveAlerts(
+    linesUsed,
+    stopIdsUsed,
+    activeControllers,
+    currentTime,
+    lines
+  );
+  const predictiveReportIds = new Set(predictiveAlerts.map(a => a.reportId));
+
+  const matchingAlerts = activeControllers.filter(rep => {
+    if (rep.type !== 'CONTROLLER') return false;
+
+    const repLine = (rep.lineId || 'ALL').toUpperCase();
+    const lineMatches = repLine === 'ALL' || upperLines.has(repLine);
+    if (!lineMatches) return false;
+
+    const prog =
+      rep.progression || computeControllerProgression(rep, currentTime, lines);
+    if (prog?.isExpired) return false;
+
+    if (prog?.mode === 'MOVING') {
+      const line = lines.find(l => l.id.toUpperCase() === repLine);
+      if (isOppositeDirectionOnLine(stopIdsUsed, line, prog.directionTerminus)) {
+        return false;
+      }
+    }
+
+    if (predictiveReportIds.has(rep.id)) {
+      return true;
+    }
+
+    const currentStopId = prog?.currentStopId || rep.stopId;
+    if (stopIdSet.has(currentStopId)) {
+      return true;
+    }
+
+    if (
+      prog?.mode === 'MOVING' &&
+      prog.upcomingStops.some(u => stopIdSet.has(u.stationId))
+    ) {
+      return true;
+    }
+
+    // Fallback for Google Transit routes whose intermediate stops may not have local IDs:
+    // check proximity strictly against same-line transit segment polylines
+    const liveLat = prog?.currentLatitude ?? rep.latitude;
+    const liveLng = prog?.currentLongitude ?? rep.longitude;
+
+    return transitSegments.some(seg => {
+      const segLine = seg.lineId.toUpperCase();
+      if (repLine !== 'ALL' && segLine !== repLine) return false;
+      return seg.polyline.some(
+        ([lat, lon]) => calculateDistanceMeters(lat, lon, liveLat, liveLng) <= 120
+      );
+    });
+  });
+
+  return { matchingAlerts, predictiveAlerts };
 }
