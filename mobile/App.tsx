@@ -282,19 +282,59 @@ export default function App() {
     if (!selectedRoute) return;
     startNavigation(selectedRoute);
     setIsFollowingUser(true);
-  }, [selectedRoute, startNavigation]);
+    if (mapRef.current) {
+      mapRef.current.animateToRegion(
+        {
+          latitude: effectiveUserLocation.latitude - 0.0008,
+          longitude: effectiveUserLocation.longitude,
+          latitudeDelta: 0.0035,
+          longitudeDelta: 0.0035,
+        },
+        800
+      );
+    }
+  }, [selectedRoute, startNavigation, effectiveUserLocation.latitude, effectiveUserLocation.longitude]);
+
+  // Suivi continu de la position de l'utilisateur style Google Maps pendant la navigation
+  useEffect(() => {
+    if (!isNavigating || !isFollowingUser || !mapRef.current) return;
+    mapRef.current.animateToRegion(
+      {
+        latitude: effectiveUserLocation.latitude - 0.0008,
+        longitude: effectiveUserLocation.longitude,
+        latitudeDelta: 0.0035,
+        longitudeDelta: 0.0035,
+      },
+      600
+    );
+  }, [isNavigating, isFollowingUser, effectiveUserLocation.latitude, effectiveUserLocation.longitude]);
 
   const handleRecenter = useCallback(() => {
     if (mapRef.current) {
-      mapRef.current.animateToRegion({
-        latitude: effectiveUserLocation.latitude,
-        longitude: effectiveUserLocation.longitude,
-        latitudeDelta: 0.014,
-        longitudeDelta: 0.014,
-      });
+      if (isNavigating) {
+        mapRef.current.animateToRegion(
+          {
+            latitude: effectiveUserLocation.latitude - 0.0008,
+            longitude: effectiveUserLocation.longitude,
+            latitudeDelta: 0.0035,
+            longitudeDelta: 0.0035,
+          },
+          600
+        );
+      } else {
+        mapRef.current.animateToRegion(
+          {
+            latitude: effectiveUserLocation.latitude,
+            longitude: effectiveUserLocation.longitude,
+            latitudeDelta: 0.014,
+            longitudeDelta: 0.014,
+          },
+          600
+        );
+      }
       setIsFollowingUser(true);
     }
-  }, [effectiveUserLocation.latitude, effectiveUserLocation.longitude]);
+  }, [effectiveUserLocation.latitude, effectiveUserLocation.longitude, isNavigating]);
 
   // "Centrer sur la ligne" from LineFilterSheet
   const handleFocusLine = useCallback(
@@ -499,6 +539,18 @@ export default function App() {
               stopNavigation();
               setUiMode('explore');
               setSheetSnap('peek');
+              setIsFollowingUser(true);
+              if (mapRef.current) {
+                mapRef.current.animateToRegion(
+                  {
+                    latitude: effectiveUserLocation.latitude,
+                    longitude: effectiveUserLocation.longitude,
+                    latitudeDelta: 0.014,
+                    longitudeDelta: 0.014,
+                  },
+                  600
+                );
+              }
             }}
           />
         )}
